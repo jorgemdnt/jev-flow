@@ -74,6 +74,19 @@ enum FocusedAppPaste {
         return true
     }
 
+    /// A typed space. Paste trimming drops a trailing space, so the separator
+    /// between takes cannot live only in the pasteboard string.
+    static func typeSpace() -> Bool {
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: false) else {
+            return false
+        }
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        return true
+    }
+
     private static func snapshot(of board: NSPasteboard) -> Snapshot {
         let items = (board.pasteboardItems ?? []).map { item in
             var entries: [(String, Data)] = []

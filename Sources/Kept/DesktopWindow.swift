@@ -23,6 +23,10 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var window: NSWindow?
     private var onboarding: NSWindow?
     private var livePanel: NSPanel?
+    private var liveHost: NSHostingView<LiveCard>?
+    private var shownPreview = ""
+    private var shownMic = ""
+    private var shownPhase: LivePhase = .idle
     private let menu = NSMenu()
 
     init(session: Session) {
@@ -154,6 +158,8 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     private func watch() {
         withObservationTracking {
+            _ = self.session.livePreview
+            _ = self.session.microphoneName
             self.applyLive(self.session.livePhase)
         } onChange: {
             Task { @MainActor in self.watch() }
@@ -161,11 +167,20 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     private func applyLive(_ phase: LivePhase) {
+        let preview = session.livePreview
+        let mic = session.microphoneName
+        let changed = preview != shownPreview || mic != shownMic || phase != shownPhase
+        shownPreview = preview
+        shownMic = mic
+        shownPhase = phase
         let live = phase != .idle
         statusItem?.button?.image = optionStatusImage(live: live)
         if live {
             statusItem?.menu = nil
             showLive()
+            if changed {
+                liveHost?.rootView = LiveCard(session: session)
+            }
         } else {
             hideLive()
             statusItem?.menu = menu
@@ -195,7 +210,8 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     private func ensureLive() -> NSPanel {
         if let livePanel { return livePanel }
         let host = NSHostingView(rootView: LiveCard(session: session))
-        let panel = NSPanel(
+        liveHost = host
+        let panel = LiveCardPanel(
             contentRect: NSRect(x: 0, y: 0, width: 288, height: 76),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -203,12 +219,13 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         )
         panel.isFloatingPanel = true
         panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.contentView = host
         livePanel = panel
         return panel
@@ -275,6 +292,11 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         image.isTemplate = false
         return image
     }
+}
+
+private final class LiveCardPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }
 
 private struct LiveCard: View {

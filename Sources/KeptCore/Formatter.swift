@@ -37,21 +37,42 @@ public enum Formatter {
     }
 }
 
+/// What is actually before the caret. A remembered trailing space is not this.
+public enum FieldJoin: Equatable, Sendable {
+    /// Caret is at the start, or the character before it is whitespace.
+    case separated
+    /// The character before the caret is not whitespace. The field dropped the space.
+    case needsSpace
+    /// The focused field could not be read.
+    case unknown
+}
+
 public enum TakeJoin {
-    /// A new take inserts one space when the previous insertion did not
-    /// already end in whitespace. An empty previous insertion is the first take.
-    public static func text(previous: String, next: String) -> String {
+    /// A new take inserts one space unless the field already ends in whitespace.
+    /// When the field cannot be read, a later take is still separated: the
+    /// previous paste's trailing space is not proof the field kept it.
+    public static func text(previous: String, next: String, field: FieldJoin = .unknown) -> String {
         guard !next.isEmpty else { return "" }
-        if previous.isEmpty || previous.last?.isWhitespace == true || next.first?.isWhitespace == true {
-            return next
-        }
+        guard needsSeparator(previous: previous, next: next, field: field) else { return next }
         return " " + next
+    }
+
+    public static func needsSeparator(previous: String, next: String, field: FieldJoin = .unknown) -> Bool {
+        guard let first = next.first, !first.isWhitespace else { return false }
+        switch field {
+        case .separated:
+            return false
+        case .needsSpace:
+            return true
+        case .unknown:
+            return !previous.isEmpty
+        }
     }
 
     /// The text that is pasted. Always ends with one space, so the next
     /// submission does not depend on the following take remembering to join.
-    public static func submission(previous: String, next: String) -> String {
-        let joined = text(previous: previous, next: next)
+    public static func submission(previous: String, next: String, field: FieldJoin = .unknown) -> String {
+        let joined = text(previous: previous, next: next, field: field)
         guard !joined.isEmpty else { return "" }
         if joined.last?.isWhitespace == true { return joined }
         return joined + " "

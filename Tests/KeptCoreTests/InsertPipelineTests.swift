@@ -37,7 +37,33 @@ private final class PasteFunction {
     #expect(delivery == .pasted(" But it doesn't. "))
 }
 
-@Test func newTakeDoesNotAddASpaceWhenThePreviousInsertionAlreadyEndsInWhitespace() {
+@Test func newTakeDoesNotAddASpaceWhenTheFieldAlreadyEndsInWhitespace() {
+    let paste = PasteFunction()
+    let delivery = InsertPipeline.afterTake(
+        raw: "but",
+        durationSeconds: 1,
+        previousInsertion: "works. ",
+        field: .separated,
+        paste: paste.paste
+    )
+    #expect(paste.calls == ["But. "])
+    #expect(delivery == .pasted("But. "))
+}
+
+@Test func aRememberedTrailingSpaceDoesNotGlueTheNextTakeToThePeriod() {
+    let paste = PasteFunction()
+    let delivery = InsertPipeline.afterTake(
+        raw: "but",
+        durationSeconds: 1,
+        previousInsertion: "works. ",
+        field: .needsSpace,
+        paste: paste.paste
+    )
+    #expect(paste.calls == [" But. "])
+    #expect(delivery == .pasted(" But. "))
+}
+
+@Test func anUnreadFieldStillSeparatesALaterTake() {
     let paste = PasteFunction()
     let delivery = InsertPipeline.afterTake(
         raw: "but",
@@ -45,6 +71,6 @@ private final class PasteFunction {
         previousInsertion: "works. ",
         paste: paste.paste
     )
-    #expect(paste.calls == ["But. "])
-    #expect(delivery == .pasted("But. "))
+    #expect(paste.calls == [" But. "])
+    #expect(delivery == .pasted(" But. "))
 }

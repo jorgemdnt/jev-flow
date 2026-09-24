@@ -13,11 +13,26 @@ actor ParakeetEngine {
         Bundle.main.resourceURL?.appendingPathComponent(SpeechRoute.parakeetModelFolder, isDirectory: true)
     }
 
+    func warmup() async {
+        _ = try? await ready()
+    }
+
     func transcribe(wavPath: String, languageCode: String) async throws -> String {
+        let data = try Data(contentsOf: URL(fileURLWithPath: wavPath))
+        guard let decoded = WavPCM.decode(data),
+              let samples = SpeechAudio.prepare(samples: decoded.samples, sampleRate: decoded.sampleRate) else {
+            throw SpeechGate.tooShort
+        }
+        return try await transcribe(samples: samples, languageCode: languageCode)
+    }
+
+    /// `samples` are already 16 kHz. A shorter buffer is not sent to the model.
+    func transcribe(samples: [Float], languageCode: String) async throws -> String {
+        guard samples.count >= SpeechAudio.minimumSamples else { throw SpeechGate.tooShort }
         let manager = try await ready()
         var state = TdtDecoderState.make()
         let result = try await manager.transcribe(
-            URL(fileURLWithPath: wavPath),
+            samples,
             decoderState: &state,
             language: Self.hint(languageCode)
         )

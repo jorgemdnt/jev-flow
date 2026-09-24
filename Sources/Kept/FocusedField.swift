@@ -1,6 +1,7 @@
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import KeptCore
 
 enum CaretInsert: Equatable {
     case location(Int)
@@ -23,6 +24,19 @@ enum FocusedField {
             guard setSelectedRange(range, on: element) else { return .selectionCouldNotCollapse }
         }
         return .location(range.location)
+    }
+
+    /// The character before the caret, when the focused field exposes it.
+    static func joinEdge() -> FieldJoin {
+        guard trusted(), let element = element(), let range = selectedRange(of: element) else {
+            return .unknown
+        }
+        let at = range.location + range.length
+        if at == 0 { return .separated }
+        guard let text = string(CFRange(location: at - 1, length: 1), on: element), let character = text.first else {
+            return .unknown
+        }
+        return character.isWhitespace ? .separated : .needsSpace
     }
 
     static func select(location: Int, length: Int) -> Bool {
@@ -74,6 +88,19 @@ enum FocusedField {
         guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
               let value else { return nil }
         return decodeRange(value)
+    }
+
+    private static func string(_ range: CFRange, on element: AXUIElement) -> String? {
+        var copy = range
+        guard let axRange = AXValueCreate(.cfRange, &copy) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element,
+            kAXStringForRangeParameterizedAttribute as CFString,
+            axRange,
+            &value
+        ) == .success, let value else { return nil }
+        return value as? String
     }
 
     private static func setSelectedRange(_ range: CFRange, on element: AXUIElement) -> Bool {
