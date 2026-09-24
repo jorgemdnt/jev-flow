@@ -9,12 +9,8 @@ actor ParakeetEngine {
     private var manager: AsrManager?
     private var loading: Task<AsrManager, Error>?
 
-    static var cacheDirectory: URL {
-        KeptPaths.modelsDirectory.appendingPathComponent(SpeechRoute.parakeetModelFolder, isDirectory: true)
-    }
-
-    static var isCached: Bool {
-        FileManager.default.fileExists(atPath: cacheDirectory.appendingPathComponent("parakeet_vocab.json").path)
+    static var bundleDirectory: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent(SpeechRoute.parakeetModelFolder, isDirectory: true)
     }
 
     func transcribe(wavPath: String, languageCode: String) async throws -> String {
@@ -48,7 +44,10 @@ actor ParakeetEngine {
     }
 
     private static func load() async throws -> AsrManager {
-        let models = try await AsrModels.downloadAndLoad(to: cacheDirectory, version: .v3)
+        guard let directory = bundleDirectory else {
+            throw ParakeetFailure.missingFromApp
+        }
+        let models = try AsrModels.loadLocal(from: directory, version: .v3)
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         return manager
@@ -58,5 +57,13 @@ actor ParakeetEngine {
     private static func hint(_ code: String) -> Language? {
         guard code != SpokenLanguage.auto.code else { return nil }
         return Language(rawValue: code)
+    }
+}
+
+private enum ParakeetFailure: LocalizedError {
+    case missingFromApp
+
+    var errorDescription: String? {
+        "Parakeet is missing from the app."
     }
 }

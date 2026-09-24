@@ -247,13 +247,6 @@ final class Session {
     private func transcribe(_ wav: URL) async throws -> String {
         let code = LanguageStore.currentCode()
         if SpeechRoute.engine(for: code) == .parakeetV3 {
-            if !ParakeetEngine.isCached {
-                if recording {
-                    if livePreview.isEmpty { livePreview = "Downloading Parakeet…" }
-                } else {
-                    status = "Downloading Parakeet…"
-                }
-            }
             return try await ParakeetEngine.shared.transcribe(wavPath: wav.path, languageCode: code)
         }
         let model = try await ModelStore.prepare { message in

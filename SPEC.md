@@ -1,6 +1,6 @@
 # JevFlow
 
-Personal Mac dictation app. The product name is JevFlow. Open source, local speech, no account, no billing, no website, no cloud speech API. The Swift module and the bundle id stay `local.kept.app`. Takes and the speech model live in `~/Library/Application Support/Kept`, never in git.
+Personal Mac dictation app. The product name is JevFlow. Open source, local speech, no account, no billing, no website, no cloud speech API. The Swift module and the bundle id stay `local.kept.app`. Takes live in `~/Library/Application Support/Kept`. The Parakeet weights ship inside the app, not in git.
 
 Wispr Flow's cleanup model is the bug. It renumbers lists, swaps rare words for common ones, turns a spoken self-correction into "or", and drops "not" / "never" / "haven't" / "before" / strategic "like". It also drops whole stretches of speech and then cannot recover them, because cleanup runs after a lossy transcript. Turning cleanup off breaks lists. JevFlow does not do that.
 
@@ -8,7 +8,7 @@ Wispr Flow's cleanup model is the bug. It renumbers lists, swaps rare words for 
 
 Locked. Do not reopen it.
 
-macOS 15. No Xcode.app. Command Line Tools only. The default recognizer is NVIDIA Parakeet TDT 0.6B v3, run on this Mac through FluidAudio (CoreML). The weights are CC-BY-4.0. Do not use the tiny whisper test model for real dictation. Do not use a cloud speech API.
+macOS 15. No Xcode.app. Command Line Tools only. The default recognizer is NVIDIA Parakeet TDT 0.6B v3, run on this Mac through FluidAudio (CoreML). The weights are CC-BY-4.0 and ship in the app. Launch does not download them. The Hugging Face repo is 3.6 GB because it includes every encoder variant. The app includes the int8 set it runs, about 480 MB. Do not use the tiny whisper test model for real dictation. Do not use a cloud speech API.
 
 A pinned language outside Parakeet's 25 European languages uses Homebrew `whisper-cli`. Auto, English, Portuguese, and the rest of that set do not. Japanese, Korean, and Chinese stay on whisper-cli because v3 romanizes them. Arabic and Hindi stay on whisper-cli because v3 does not support them. The final transcript is a v3 batch. It is not the English-only Parakeet EOU streaming model.
 
@@ -59,9 +59,9 @@ Save the pasteboard, paste the accepted text into the focused app with Command-V
 - `Package.swift` executable target `Kept` plus a test target
 - `Sources/KeptCore/` pure formatter and insert-decision types, no AppKit
 - `Sources/Kept/` menu bar app, hotkey, recorder, recognizer
-- `scripts/package-app.sh` builds `JevFlow.app`
+- `scripts/package-app.sh` builds `JevFlow.app` and copies the Parakeet weights into it
 - `Tests/KeptCoreTests/` the rules above
-- Models live in `~/Library/Application Support/Kept/models/`, never in git
+- Whisper fallback models, if a pinned language needs them, live in `~/Library/Application Support/Kept/models/`. Never in git.
 - Install the built app to `~/Applications/JevFlow.app`. The bundle id stays `local.kept.app`.
 
 ## Out of scope

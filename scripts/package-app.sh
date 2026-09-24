@@ -17,6 +17,12 @@ chmod 755 "$app/Contents/MacOS/Kept"
 mkdir -p "$app/Contents/Resources"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 
+model_cache="$HOME/Library/Application Support/Kept/models/parakeet-tdt-0.6b-v3-coreml"
+python3 "$root/scripts/fetch-parakeet.py" "$model_cache"
+ditto "$model_cache" "$app/Contents/Resources/parakeet-tdt-0.6b-v3-coreml"
+test -f "$app/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/parakeet_vocab.json"
+test -d "$app/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/Encoder.mlmodelc"
+
 cat > "$app/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -93,6 +99,8 @@ test "$(plutil -extract LSUIElement raw "$installed/Contents/Info.plist")" = "tr
 test "$(plutil -extract CFBundleIdentifier raw "$installed/Contents/Info.plist")" = "local.kept.app"
 test "$(plutil -extract CFBundleName raw "$installed/Contents/Info.plist")" = "JevFlow"
 test -f "$installed/Contents/Resources/AppIcon.icns"
+test -f "$installed/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/parakeet_vocab.json"
+test -d "$installed/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/Encoder.mlmodelc"
 
 old="$install_dir/Kept.app"
 if [ -e "$old" ]; then
