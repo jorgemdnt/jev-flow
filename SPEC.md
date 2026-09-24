@@ -1,14 +1,14 @@
-# Kept
+# JevFlow
 
-Personal Mac dictation app. Open source, local only, no account, no billing, no website, no cloud speech API, no LLM rewrite pass.
+Personal Mac dictation app. The product name is JevFlow. Open source, local speech, no account, no billing, no website, no cloud speech API. The Swift module and the bundle id stay `local.kept.app`. Takes and the speech model live in `~/Library/Application Support/Kept`, never in git.
 
-Wispr Flow's cleanup model is the bug. It renumbers lists, swaps rare words for common ones, turns a spoken self-correction into "or", and drops "not" / "never" / "haven't" / "before" / strategic "like". It also drops whole stretches of speech and then cannot recover them, because cleanup runs after a lossy transcript. Turning cleanup off breaks lists. Kept does not do that.
+Wispr Flow's cleanup model is the bug. It renumbers lists, swaps rare words for common ones, turns a spoken self-correction into "or", and drops "not" / "never" / "haven't" / "before" / strategic "like". It also drops whole stretches of speech and then cannot recover them, because cleanup runs after a lossy transcript. Turning cleanup off breaks lists. JevFlow does not do that.
 
 ## Stack
 
 Locked. Do not reopen it.
 
-macOS 15.6, Apple M4 Pro, 48 GB. No Xcode.app. Only Command Line Tools (`/Library/Developer/CommandLineTools`, Swift 6.2.3). `whisper-cli` is `/opt/homebrew/bin/whisper-cli`. The only model already on disk is Homebrew's tiny test file. Do not use tiny for real dictation.
+macOS 15. No Xcode.app. Command Line Tools only. `whisper-cli` comes from Homebrew. Do not use the tiny test model for real dictation.
 
 2026 desktop landscape, and why it is not the stack:
 
@@ -19,9 +19,9 @@ macOS 15.6, Apple M4 Pro, 48 GB. No Xcode.app. Only Command Line Tools (`/Librar
 
 ## What it does
 
-Hold Right Option to talk. While held, partial text updates in the focused field. Release replaces that partial with the cleaned transcript. A desktop window shows the takes. Right-click the menu-bar icon for the context menu. Left-click toggles the window and does not activate Kept, so the focused app keeps the caret.
+Hold Right Option to talk. A card under the menu-bar icon shows the words as they arrive. It does not take keyboard focus. Release pastes the formatted transcript once into the focused field. Click the menu-bar icon for the menu. Open JevFlow for history, dictionary, and settings.
 
-The final text is cleaned by gpt-6-luna at reasoning effort xhigh, using the OpenAI key already in ~/.zshenv. The key is not copied into the repo. The model may clean phrases, adjust words, and format a spoken list as bullets. If that cleanup drops a guard word, rewrites auth to off, turns a correction into or, or renumbers a spoken list, it is thrown out and the local text is inserted instead. Partials stay local. Speech stays on this Mac.
+The final text is formatted by Jev. Jev chooses whether the take is prose, a list, or numbered, and which dictionary span you meant. Code applies that and keeps the words. It does not rewrite the sentence. The TypeSafe key is the one saved in Settings, or `TYPESAFE_API_KEY` in the environment. The key is not copied into the repo. If that call fails, the local text is inserted.
 
 A mark sits on the focused app's Accessibility caret while recording and while transcribing. If Accessibility is missing, say so in the menu. Do not use a mark near the mouse instead.
 
@@ -55,10 +55,10 @@ Save the pasteboard, paste the accepted text into the focused app with Command-V
 - `Package.swift` executable target `Kept` plus a test target
 - `Sources/KeptCore/` pure formatter and insert-decision types, no AppKit
 - `Sources/Kept/` menu bar app, hotkey, recorder, whisper-cli runner
-- `scripts/package-app.sh` builds `Kept.app`
+- `scripts/package-app.sh` builds `JevFlow.app`
 - `Tests/KeptCoreTests/` the rules above
 - Models live in `~/Library/Application Support/Kept/models/`, never in git
-- Install the built app to `~/Applications/Kept.app`
+- Install the built app to `~/Applications/JevFlow.app`. The bundle id stays `local.kept.app`.
 
 ## Out of scope
 

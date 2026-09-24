@@ -8,7 +8,17 @@ import Testing
     #expect(request.contains("bullet"))
     #expect(request.contains("not"))
     #expect(Cleanup.model == "gpt-6-luna")
-    #expect(Cleanup.reasoningEffort == "xhigh")
+    #expect(Cleanup.reasoningEffort == "low")
+}
+
+@Test func cleanupRequestUsesTheTalkingStyleAndDictionary() {
+    let request = Cleanup.request(for: "ship the auth change", style: .casual, keep: ["PostHog"])
+    #expect(request.contains("text a friend"))
+    #expect(request.contains("PostHog"))
+}
+
+@Test func cleanupKeepsADictionaryWordThatWasSpoken() {
+    #expect(Cleanup.accept(source: "ship auth", cleaned: "Ship it.", keep: ["auth"]) == nil)
 }
 
 @Test func cleanupRejectsADroppedGuardWord() {

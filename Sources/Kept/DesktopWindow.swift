@@ -2,11 +2,26 @@ import AppKit
 import KeptCore
 import SwiftUI
 
+enum KeptPage: Hashable {
+    case history
+    case dictionary
+    case style
+    case settings
+}
+
 @MainActor
-final class KeptChrome: NSObject, NSMenuDelegate {
+@Observable
+final class KeptPages {
+    var page: KeptPage = .history
+}
+
+@MainActor
+final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     let session: Session
+    let pages = KeptPages()
     private var statusItem: NSStatusItem?
-    private var panel: NSPanel?
+    private var window: NSWindow?
+    private var livePanel: NSPanel?
     private let menu = NSMenu()
 
     init(session: Session) {
@@ -15,196 +30,270 @@ final class KeptChrome: NSObject, NSMenuDelegate {
 
     func install() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.target = self
-        item.button?.action = #selector(click)
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        item.button?.image = optionStatusImage(live: false)
         statusItem = item
         menu.delegate = self
+        menu.autoenablesItems = false
+        item.menu = menu
+        TypeSafeKey.adoptEnvironmentKey()
         watch()
-        if UserDefaults.standard.object(forKey: Self.visibleKey) as? Bool ?? true {
-            show()
-        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
-        let status = NSMenuItem(title: session.status, action: nil, keyEquivalent: "")
+        let status = NSMenuItem(title: menuStatus, action: nil, keyEquivalent: "")
+        status.image = dot(menuDot)
         status.isEnabled = false
         menu.addItem(status)
+        if !session.canInsert {
+            let missing = NSMenuItem(title: "Accessibility required to insert", action: nil, keyEquivalent: "")
+            missing.isEnabled = false
+            menu.addItem(missing)
+        }
         if !session.caretNote.isEmpty {
             let note = NSMenuItem(title: session.caretNote, action: nil, keyEquivalent: "")
             note.isEnabled = false
             menu.addItem(note)
         }
-        if !session.canInsert {
-            let missing = NSMenuItem(title: Session.insertNeedsAccessibility, action: nil, keyEquivalent: "")
-            missing.isEnabled = false
-            menu.addItem(missing)
-        }
         menu.addItem(.separator())
-        let toggle = NSMenuItem(
-            title: panel?.isVisible == true ? "Hide Window" : "Show Window",
-            action: #selector(toggleWindow),
-            keyEquivalent: ""
-        )
-        toggle.target = self
-        menu.addItem(toggle)
+        menu.addItem(item("Open JevFlow", symbol: "macwindow", action: #selector(openHistory), key: "o"))
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-    }
 
-    @objc private func click() {
-        let event = NSApp.currentEvent
-        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
-            popMenu()
-        } else {
-            toggleWindow()
+        menu.addItem(item("Dictionary…", symbol: "character.book.closed", action: #selector(openDictionary), key: ""))
+        menu.addItem(item("Settings…", symbol: "gearshape", action: #selector(openSettings), key: ","))
+        menu.addItem(.separator())
+
+        if let held = session.takes.first(where: { session.refusesAutoInsert($0) && $0.insertedText == nil }) {
+            let raw = item("Insert raw", symbol: "arrow.down.doc", action: #selector(insertRawItem(_:)), key: "")
+            raw.representedObject = held.id
+            menu.addItem(raw)
+            menu.addItem(.separator())
         }
+
+        menu.addItem(item("Quit JevFlow", symbol: "power", action: #selector(quit), key: "q"))
     }
 
-    @objc private func toggleWindow() {
-        if panel?.isVisible == true {
-            hide()
-        } else {
-            show()
-        }
+    private func item(_ title: String, symbol name: String, action: Selector, key: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        item.image = symbol(name)
+        return item
     }
 
-    @objc private func quit() {
-        NSApp.terminate(nil)
+    @objc private func openHistory() { open(.history) }
+    @objc private func openDictionary() { open(.dictionary) }
+    @objc private func openSettings() { open(.settings) }
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    @objc private func insertRawItem(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        session.insertRaw(id)
     }
 
-    private func show() {
-        let panel = ensurePanel()
-        panel.orderFrontRegardless()
-        UserDefaults.standard.set(true, forKey: Self.visibleKey)
+    private func open(_ page: KeptPage) {
+        pages.page = page
+        NSApp.setActivationPolicy(.regular)
+        let window = ensureWindow()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func hide() {
-        panel?.orderOut(nil)
-        UserDefaults.standard.set(false, forKey: Self.visibleKey)
+    func windowWillClose(_ notification: Notification) {
+        window = nil
+        NSApp.setActivationPolicy(.accessory)
     }
 
-    private func popMenu() {
-        guard let button = statusItem?.button else { return }
-        menuWillOpen(menu)
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
-    }
-
-    private func ensurePanel() -> NSPanel {
-        if let panel { return panel }
-        let host = NSHostingController(rootView: KeptDesktopView(session: session))
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 520),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Kept"
-        panel.contentViewController = host
-        panel.isFloatingPanel = false
-        panel.level = .normal
-        panel.hidesOnDeactivate = false
-        panel.isReleasedWhenClosed = false
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.setFrameAutosaveName("KeptDesktop")
-        panel.isMovableByWindowBackground = false
-        panel.center()
-        self.panel = panel
-        return panel
+    private func ensureWindow() -> NSWindow {
+        if let window { return window }
+        let host = NSHostingController(rootView: KeptWindow(session: session, pages: pages))
+        let window = NSWindow(contentViewController: host)
+        window.title = "JevFlow"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.setContentSize(NSSize(width: 860, height: 560))
+        window.backgroundColor = NSColor(name: nil, dynamicProvider: { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                ? NSColor(calibratedWhite: 0.11, alpha: 1)
+                : NSColor(calibratedRed: 0.965, green: 0.957, blue: 0.945, alpha: 1)
+        })
+        window.isMovableByWindowBackground = true
+        window.delegate = self
+        window.isReleasedWhenClosed = false
+        self.window = window
+        return window
     }
 
     private func watch() {
         withObservationTracking {
-            self.applyIcon(recording: session.recording)
-        } onChange: { [weak self] in
-            Task { @MainActor in
-                self?.watch()
-            }
+            self.applyLive(self.session.livePhase)
+        } onChange: {
+            Task { @MainActor in self.watch() }
         }
     }
 
-    private func applyIcon(recording: Bool) {
-        let name = recording ? "mic.fill" : "mic"
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Kept")
-        image?.isTemplate = true
-        statusItem?.button?.image = image
+    private func applyLive(_ phase: LivePhase) {
+        let live = phase != .idle
+        statusItem?.button?.image = optionStatusImage(live: live)
+        if live {
+            statusItem?.menu = nil
+            showLive()
+        } else {
+            hideLive()
+            statusItem?.menu = menu
+        }
     }
 
-    private static let visibleKey = "KeptWindowVisible"
+    private func showLive() {
+        let panel = ensureLive()
+        guard let button = statusItem?.button, let window = button.window else { return }
+        let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let size = NSSize(width: 280, height: 92)
+        panel.setFrame(
+            NSRect(x: rect.midX - size.width / 2, y: rect.minY - size.height - 6, width: size.width, height: size.height),
+            display: true
+        )
+        panel.orderFrontRegardless()
+    }
+
+    private func hideLive() {
+        livePanel?.orderOut(nil)
+    }
+
+    private func ensureLive() -> NSPanel {
+        if let livePanel { return livePanel }
+        let host = NSHostingView(rootView: LiveCard(session: session))
+        let panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 280, height: 92),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = true
+        panel.contentView = host
+        livePanel = panel
+        return panel
+    }
+
+    private var menuStatus: String {
+        if session.livePhase == .listening { return "Listening" }
+        if session.livePhase == .transcribing { return "Transcribing" }
+        if session.livePhase == .cleaning { return "Formatting" }
+        if session.status == "Hold Right Option to talk" { return "Ready" }
+        return session.status
+    }
+
+    private var menuDot: NSColor {
+        switch session.livePhase {
+        case .listening: .systemRed
+        case .transcribing, .cleaning: .systemOrange
+        case .idle: session.canInsert ? .systemGreen : .systemOrange
+        }
+    }
+
+    private func optionStatusImage(live: Bool) -> NSImage {
+        let side: CGFloat = 18
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let box = rect.insetBy(dx: live ? 1.4 : 2.0, dy: live ? 1.4 : 2.0)
+            func map(_ x: CGFloat, _ y: CGFloat) -> NSPoint {
+                NSPoint(x: box.minX + x / 24 * box.width, y: box.minY + (24 - y) / 24 * box.height)
+            }
+            let zigzag = NSBezierPath()
+            zigzag.move(to: map(3, 3))
+            zigzag.line(to: map(9, 3))
+            zigzag.line(to: map(15, 21))
+            zigzag.line(to: map(21, 21))
+            let bar = NSBezierPath()
+            bar.move(to: map(14, 3))
+            bar.line(to: map(21, 3))
+            NSColor.black.setStroke()
+            for path in [zigzag, bar] {
+                path.lineWidth = live ? 2.15 : 1.65
+                path.lineCapStyle = .round
+                path.lineJoinStyle = .round
+                path.stroke()
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "JevFlow"
+        return image
+    }
+
+    private func symbol(_ name: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
+        image?.isTemplate = true
+        image?.size = NSSize(width: 16, height: 16)
+        return image
+    }
+
+    private func dot(_ color: NSColor) -> NSImage {
+        let image = NSImage(size: NSSize(width: 16, height: 16))
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 5, y: 5, width: 6, height: 6)).fill()
+        image.unlockFocus()
+        image.isTemplate = false
+        return image
+    }
 }
 
-struct KeptDesktopView: View {
-    @Bindable var session: Session
+private struct LiveCard: View {
+    let session: Session
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(session.status)
-                .font(.headline)
-            if !session.caretNote.isEmpty, session.caretNote != session.status {
-                Text(session.caretNote)
-                    .foregroundStyle(.secondary)
-            }
-            if !session.canInsert, session.status != Session.insertNeedsAccessibility {
-                Text(Session.insertNeedsAccessibility)
-                    .foregroundStyle(.secondary)
-            }
-            labeled("Last raw", session.lastRawTranscript.isEmpty ? "No takes yet" : session.lastRawTranscript)
-            labeled("Last inserted", session.lastInsertedText.isEmpty ? "Nothing inserted yet" : session.lastInsertedText)
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if session.takes.isEmpty {
-                        Text("No takes yet")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(session.takes) { take in
-                        takeRow(take)
-                        Divider()
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(16)
-        .frame(minWidth: 340, minHeight: 420)
-    }
-
-    private func labeled(_ title: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .textSelection(.enabled)
-        }
-    }
-
-    @ViewBuilder
-    private func takeRow(_ take: Take) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(take.rawTranscript.isEmpty ? "(empty transcript)" : take.rawTranscript)
-                .textSelection(.enabled)
-            Text(String(format: "%.1f s", take.durationSeconds))
+            Text(caption)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            if session.refusesAutoInsert(take), take.insertedText == nil {
-                Text(Session.keptNotPasted)
-                Button("Insert raw") { session.insertRaw(take.id) }
-            } else if let inserted = take.insertedText {
-                Text(inserted)
-                    .textSelection(.enabled)
-            } else {
-                if !session.keptText(take).isEmpty {
-                    Text(session.keptText(take))
-                        .textSelection(.enabled)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Text(tail)
+                        .font(.system(size: 13))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(tail)
                 }
-                Button("Insert") { session.insertKept(take.id) }
+                .scrollIndicators(.hidden)
+                .defaultScrollAnchor(.bottom)
+                .onChange(of: session.livePreview) { _, _ in
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        proxy.scrollTo("tail", anchor: .bottom)
+                    }
+                }
             }
-            Button("Dismiss") { session.dismiss(take.id) }
+            .frame(height: 54)
+        }
+        .padding(12)
+        .frame(width: 280, height: 92, alignment: .topLeading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .animation(.easeOut(duration: 0.18), value: session.livePhase)
+    }
+
+    private var tail: String {
+        let text = session.livePreview.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "…" }
+        guard text.count > 180 else { return text }
+        let start = text.index(text.endIndex, offsetBy: -180)
+        let slice = text[start...]
+        guard let space = slice.firstIndex(where: { $0.isWhitespace }) else { return String(slice) }
+        let rest = slice[slice.index(after: space)...].trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? String(slice) : rest
+    }
+
+    private var caption: String {
+        switch session.livePhase {
+        case .listening: "Listening"
+        case .transcribing: "Transcribing"
+        case .cleaning: "Formatting"
+        case .idle: ""
         }
     }
 }
+

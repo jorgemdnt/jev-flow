@@ -4,6 +4,13 @@ import AVFoundation
 import Foundation
 import KeptCore
 
+enum LivePhase: Equatable {
+    case idle
+    case listening
+    case transcribing
+    case cleaning
+}
+
 @MainActor
 @Observable
 final class Session {
@@ -11,6 +18,9 @@ final class Session {
     var recording = false
     var takes: [Take] = []
     var lastInsertedText = ""
+    var livePhase: LivePhase = .idle
+    var livePreview = ""
+    let voice = VoiceStore()
 
     static let insertNeedsAccessibility = "Accessibility permission is required to insert. Text kept."
     static let keptNotPasted = "Kept this take and did not paste it."
@@ -114,6 +124,10 @@ final class Session {
         Task { await insertManually(id: id, formatted: true) }
     }
 
+    func insertAgain(_ id: UUID) {
+        Task { await insertStored(id: id) }
+    }
+
     private func startRecordingIfStillHeld() async {
         guard held, !recording, !arming else { return }
         arming = true
@@ -140,6 +154,8 @@ final class Session {
         activeWav = wav
         anchor = lastInsertedText
         recording = true
+        livePhase = .listening
+        livePreview = ""
         status = "Recording…"
         caret.show()
         let previousFinish = finishTask
@@ -174,9 +190,9 @@ final class Session {
             }
             try? FileManager.default.removeItem(at: snap.url)
             guard recording, activeID == id else { return }
-            let text = TakeJoin.text(previous: anchor, next: Formatter.streaming(raw))
+            let text = Formatter.streaming(raw)
             guard !text.isEmpty else { continue }
-            publish(text)
+            livePreview = text
         }
     }
 
@@ -185,12 +201,17 @@ final class Session {
             busy = false
             if !recording {
                 caret.hide()
+                livePhase = .idle
+                livePreview = ""
             }
             if held { Task { await startRecordingIfStillHeld() } }
         }
         let transcript: String
         do {
-            if !recording { status = "Transcribing…" }
+            if !recording {
+                status = "Transcribing…"
+                livePhase = .transcribing
+            }
             transcript = try await transcribe(wav)
         } catch {
             if !recording { status = error.localizedDescription }
@@ -201,8 +222,11 @@ final class Session {
         let decision = InsertDecision(transcript: transcript, durationSeconds: duration)
         let outcome: CleanupOutcome
         if decision.autoInsert {
-            if !recording { status = "Cleaning up…" }
-            outcome = await LunaCleanup.prepare(raw: transcript)
+            if !recording {
+                status = "Formatting…"
+                livePhase = .cleaning
+            }
+            outcome = await JevFormat.prepare(raw: transcript, dictionary: voice.words)
         } else {
             outcome = .local("", note: "")
         }
@@ -351,8 +375,8 @@ final class Session {
         let text: String
         let note: String?
         if formatted {
-            status = "Cleaning up…"
-            let outcome = await LunaCleanup.prepare(raw: take.rawTranscript)
+            status = "Formatting…"
+            let outcome = await JevFormat.prepare(raw: take.rawTranscript, dictionary: voice.words)
             text = outcome.text
             note = outcome.note
         } else {
@@ -368,6 +392,28 @@ final class Session {
         case .pasted:
             recordInserted(id: id, text: inserting)
             status = (note?.isEmpty == false) ? note! : "Hold Right Option to talk"
+        case .accessibilityMissing:
+            status = Self.insertNeedsAccessibility
+        case .failed:
+            status = "Could not insert. Text kept."
+        }
+    }
+
+    private func insertStored(id: UUID) async {
+        guard let take = takes.first(where: { $0.id == id }) else { return }
+        let text = take.insertedText ?? TakeJoin.text(previous: lastInsertedText, next: Formatter.finished(take.rawTranscript))
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard Self.accessibilityTrusted(prompt: true) else {
+            status = Self.insertNeedsAccessibility
+            return
+        }
+        await FocusedAppPaste.focusForeignAppIfNeeded()
+        switch FocusedAppPaste.paste(text) {
+        case .pasted:
+            lastInsertedText = text
+            let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+            status = "Hold Right Option to talk"
         case .accessibilityMissing:
             status = Self.insertNeedsAccessibility
         case .failed:

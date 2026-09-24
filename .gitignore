@@ -8,5 +8,4 @@
 .DS_Store
 Models/
 *.bin
-Vendor/modules/*
-!Vendor/modules/Testing.swiftmodule
+Vendor/modules/
