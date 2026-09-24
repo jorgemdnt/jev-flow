@@ -72,8 +72,28 @@ import Testing
     #expect(shown == "Parakeet is missing from the app.")
 }
 
-@Test func aFalseKeyStateDoesNotEndAHoldItNeverSaw() {
-    #expect(HoldKey.release(wasDown: true, sawPhysicalDown: false, physicalDown: false) == false)
-    #expect(HoldKey.release(wasDown: true, sawPhysicalDown: true, physicalDown: false) == true)
-    #expect(HoldKey.release(wasDown: true, sawPhysicalDown: true, physicalDown: true) == false)
+@Test func aReleaseWithNoDeviceBitsEndsTheHold() {
+    #expect(HoldKey.event(wasDown: true, keyCode: 0, flags: 0) == .up)
+    #expect(HoldKey.event(wasDown: true, keyCode: 0x3D, flags: 0) == .up)
+    #expect(HoldKey.event(wasDown: false, keyCode: 0x3D, flags: 0x40) == .down)
+    #expect(HoldKey.event(wasDown: true, keyCode: 0x38, flags: 0x40) == nil)
+    #expect(HoldKey.event(wasDown: false, keyCode: 0, flags: 0) == nil)
+}
+
+@Test func aFlagsSampleEndsTheHoldOnlyAfterTheDeviceBitWasSeen() {
+    let quiet = HoldKey.flagsRelease(wasDown: true, sawDeviceBit: false, flags: 0)
+    #expect(quiet.edge == nil)
+    #expect(quiet.sawDeviceBit == false)
+
+    let seen = HoldKey.flagsRelease(wasDown: true, sawDeviceBit: false, flags: 0x40)
+    #expect(seen.edge == nil)
+    #expect(seen.sawDeviceBit == true)
+
+    let released = HoldKey.flagsRelease(wasDown: true, sawDeviceBit: true, flags: 0)
+    #expect(released.edge == .up)
+    #expect(released.sawDeviceBit == false)
+
+    let stillHeld = HoldKey.flagsRelease(wasDown: true, sawDeviceBit: true, flags: 0x40)
+    #expect(stillHeld.edge == nil)
+    #expect(stillHeld.sawDeviceBit == true)
 }

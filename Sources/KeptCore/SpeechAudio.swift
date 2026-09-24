@@ -81,9 +81,35 @@ public enum HoldKey {
         return physicalDown ? .down : .up
     }
 
-    /// A physical reading may end a hold only after that key was seen down.
-    /// Right Option's key state stays false while the key is held, so a blind false is not a release.
-    public static func release(wasDown: Bool, sawPhysicalDown: Bool, physicalDown: Bool) -> Bool {
-        wasDown && sawPhysicalDown && !physicalDown
+    /// A flagsChanged event. A release with no device bits left is still a release.
+    /// Right Option's key state stays false while held, so this does not read key state.
+    public static func event(wasDown: Bool, keyCode: UInt16, flags: UInt64) -> Edge? {
+        if keyCode != rightOptionKey && !wasDown { return nil }
+        return edge(wasDown: wasDown, physicalDown: rightOptionDown(flags: flags))
+    }
+
+    /// A flags-state sample. This never starts a hold. It ends one only after a
+    /// sample in this hold already contained the right-option device bit.
+    /// A reading that never had that bit is not a release.
+    public static func flagsRelease(wasDown: Bool, sawDeviceBit: Bool, flags: UInt64) -> (edge: Edge?, sawDeviceBit: Bool) {
+        let deviceDown = (flags & rightOptionDeviceBit) != 0
+        let seen = sawDeviceBit || deviceDown
+        if wasDown && seen && !deviceDown {
+            return (.up, false)
+        }
+        return (nil, seen)
+    }
+
+    public static let rightOptionKey: UInt16 = 0x3D
+    public static let rightOptionDeviceBit: UInt64 = 0x40
+    public static let deviceModifierBits: UInt64 = 0x0000_207F
+    public static let optionBit: UInt64 = 0x0008_0000
+
+    public static func rightOptionDown(flags: UInt64) -> Bool {
+        let devices = flags & deviceModifierBits
+        if devices != 0 {
+            return (flags & rightOptionDeviceBit) != 0
+        }
+        return (flags & optionBit) != 0
     }
 }

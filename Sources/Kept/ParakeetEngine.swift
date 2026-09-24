@@ -1,20 +1,80 @@
+import AVFoundation
 import FluidAudio
 import Foundation
 import KeptCore
 
-/// Local Parakeet TDT 0.6B v3. Batch only. Not the English-only EOU model.
+/// Local Parakeet TDT 0.6B v3. The live card streams that same model.
+/// The pasted transcript is still a v3 batch, not the English-only EOU model.
 actor ParakeetEngine {
     static let shared = ParakeetEngine()
 
     private var manager: AsrManager?
-    private var loading: Task<AsrManager, Error>?
+    private var loadedModels: AsrModels?
+    private var loading: Task<AsrModels, Error>?
+    private var live: SlidingWindowAsrManager?
+    private var liveTask: Task<Void, Never>?
+    private var liveGeneration = 0
 
     static var bundleDirectory: URL? {
         Bundle.main.resourceURL?.appendingPathComponent(SpeechRoute.parakeetModelFolder, isDirectory: true)
     }
 
     func warmup() async {
+        _ = try? await models()
         _ = try? await ready()
+    }
+
+    /// Opens a low-latency v3 stream. Each yield is the text so far.
+    /// Call `endLive()` on release. The paste still uses `transcribe`.
+    func beginLive(languageCode: String) async throws -> AsyncStream<String> {
+        let generation = liveGeneration
+        let models = try await models()
+        guard generation == liveGeneration else { throw CancellationError() }
+        let config = SlidingWindowAsrConfig(
+            chunkSeconds: 0.5,
+            hypothesisChunkSeconds: 0.5,
+            leftContextSeconds: 1.0,
+            rightContextSeconds: 0,
+            minContextForConfirmation: 8,
+            confirmationThreshold: 0.8,
+            language: Self.hint(languageCode)
+        )
+        let stream = SlidingWindowAsrManager(config: config)
+        try await stream.loadModels(models)
+        guard generation == liveGeneration else {
+            await stream.cancel()
+            throw CancellationError()
+        }
+        let updates = await stream.transcriptionUpdates
+        try await stream.startStreaming(source: .microphone)
+        guard generation == liveGeneration else {
+            await stream.cancel()
+            throw CancellationError()
+        }
+        live = stream
+        let (output, continuation) = AsyncStream<String>.makeStream()
+        liveTask = Task {
+            for await update in updates {
+                let text = await Self.shown(stream, fallback: update.text)
+                if !text.isEmpty { continuation.yield(text) }
+            }
+            continuation.finish()
+        }
+        return output
+    }
+
+    func pushLive(_ samples: [Float]) async {
+        guard let live, let buffer = Self.buffer(samples) else { return }
+        await live.streamAudio(buffer)
+    }
+
+    func endLive() async {
+        liveGeneration &+= 1
+        let stream = live
+        live = nil
+        liveTask?.cancel()
+        liveTask = nil
+        await stream?.cancel()
     }
 
     func transcribe(wavPath: String, languageCode: String) async throws -> String {
@@ -44,12 +104,21 @@ actor ParakeetEngine {
 
     private func ready() async throws -> AsrManager {
         if let manager { return manager }
+        let models = try await models()
+        let loaded = AsrManager(config: .default)
+        try await loaded.loadModels(models)
+        manager = loaded
+        return loaded
+    }
+
+    private func models() async throws -> AsrModels {
+        if let loadedModels { return loadedModels }
         if let loading { return try await loading.value }
-        let task = Task { try await Self.load() }
+        let task = Task { try Self.loadModels() }
         loading = task
         do {
             let loaded = try await task.value
-            manager = loaded
+            loadedModels = loaded
             loading = nil
             return loaded
         } catch {
@@ -58,14 +127,37 @@ actor ParakeetEngine {
         }
     }
 
-    private static func load() async throws -> AsrManager {
+    private static func loadModels() throws -> AsrModels {
         guard let directory = bundleDirectory else {
             throw ParakeetFailure.missingFromApp
         }
-        let models = try AsrModels.loadLocal(from: directory, version: .v3)
-        let manager = AsrManager(config: .default)
-        try await manager.loadModels(models)
-        return manager
+        return try AsrModels.loadLocal(from: directory, version: .v3)
+    }
+
+    private static func shown(_ stream: SlidingWindowAsrManager, fallback: String) async -> String {
+        let confirmed = await stream.confirmedTranscript
+        let volatileText = await stream.volatileTranscript
+        let joined = [confirmed, volatileText].filter { !$0.isEmpty }.joined(separator: " ")
+        return joined.isEmpty ? fallback : joined
+    }
+
+    private static func buffer(_ samples: [Float]) -> AVAudioPCMBuffer? {
+        guard !samples.isEmpty,
+              let format = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: SpeechAudio.sampleRate,
+                channels: 1,
+                interleaved: false
+              ),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
+              let channel = buffer.floatChannelData?[0]
+        else { return nil }
+        samples.withUnsafeBufferPointer { source in
+            guard let address = source.baseAddress else { return }
+            channel.update(from: address, count: samples.count)
+        }
+        buffer.frameLength = AVAudioFrameCount(samples.count)
+        return buffer
     }
 
     /// `auto` lets v3 detect among the 25. A pinned code is a script hint.

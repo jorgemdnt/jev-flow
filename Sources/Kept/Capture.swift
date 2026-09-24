@@ -75,7 +75,11 @@ final class Session {
 
     func endHold() {
         held = false
-        guard recording, let wav = activeWav, let id = activeID else { return }
+        Task { await ParakeetEngine.shared.endLive() }
+        guard recording, let wav = activeWav, let id = activeID else {
+            clearListening()
+            return
+        }
         let duration = mic.stop()
         recording = false
         activeWav = nil
@@ -158,6 +162,12 @@ final class Session {
         do {
             try mic.start(url: wav)
             microphoneName = mic.deviceName
+            guard held else {
+                _ = mic.stop()
+                try? FileManager.default.removeItem(at: wav)
+                clearListening()
+                return
+            }
         } catch {
             status = "Could not start the microphone"
             livePhase = .idle
@@ -182,9 +192,50 @@ final class Session {
         }
     }
 
-    /// Local v3 batches of the audio so far. The card updates when a chunk finishes.
-    /// Partials are not pasted. Release runs one fresh v3 batch for the field.
+    /// v3 sliding windows while the key is down. The card updates as each
+    /// window finishes. Partials are not pasted. Release runs one v3 batch.
     private func streamPartials(id: UUID) async {
+        let code = LanguageStore.currentCode()
+        guard SpeechRoute.engine(for: code) == .parakeetV3 else {
+            await streamBatchPartials(id: id)
+            return
+        }
+        let updates: AsyncStream<String>
+        do {
+            updates = try await ParakeetEngine.shared.beginLive(languageCode: code)
+        } catch {
+            guard recording, activeID == id, !Task.isCancelled else { return }
+            await streamBatchPartials(id: id)
+            return
+        }
+        let feed = Task { [weak self] in
+            var fed = 0
+            while !Task.isCancelled {
+                guard let self else { return }
+                let pcm = self.mic.copyPCM()
+                let samples = WavPCM.floatSamples(pcm)
+                if samples.count > fed {
+                    let delta = Array(samples[fed..<samples.count])
+                    fed = samples.count
+                    await ParakeetEngine.shared.pushLive(delta)
+                }
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+        }
+        defer { feed.cancel() }
+        for await raw in updates {
+            guard recording, activeID == id, !Task.isCancelled else { break }
+            let text = Formatter.streaming(raw)
+            if !text.isEmpty {
+                livePreview = text
+            }
+        }
+        feed.cancel()
+        await ParakeetEngine.shared.endLive()
+    }
+
+    /// Whisper, and a v3 stream that failed to open. Re-reads the audio so far.
+    private func streamBatchPartials(id: UUID) async {
         var sent = 0
         while recording, activeID == id, !Task.isCancelled {
             let pcm = mic.copyPCM()
@@ -203,14 +254,10 @@ final class Session {
                     livePreview = text
                 }
                 sent = snapshot.count
+                await Task.yield()
             } catch {
                 guard recording, activeID == id, !Task.isCancelled else { return }
-                if SpeechAudio.isBufferRejection(error) {
-                    try? await Task.sleep(for: .milliseconds(40))
-                    continue
-                }
-                sent = snapshot.count
-                try? await Task.sleep(for: .milliseconds(120))
+                try? await Task.sleep(for: .milliseconds(80))
             }
         }
     }
@@ -493,7 +540,6 @@ private actor WhisperSerial {
 
 final class RightOptionMonitor {
     static let keyCode: UInt16 = 0x3D
-    static let deviceFlag: UInt = 0x40
 
     var onDown: () -> Void = {}
     var onUp: () -> Void = {}
@@ -501,10 +547,11 @@ final class RightOptionMonitor {
     private(set) var isDown = false
     private var global: Any?
     private var local: Any?
+    private var keyGlobal: Any?
+    private var keyLocal: Any?
     private var timer: Timer?
     private var down = false
-    private var sawPhysicalDown = false
-    private var upPolls = 0
+    private var sawDeviceBit = false
 
     func start() {
         guard global == nil, local == nil else { return }
@@ -516,6 +563,14 @@ final class RightOptionMonitor {
             self?.handle(event)
             return event
         }
+        let keys: NSEvent.EventTypeMask = [.keyDown, .keyUp]
+        keyGlobal = NSEvent.addGlobalMonitorForEvents(matching: keys) { [weak self] event in
+            self?.handle(event)
+        }
+        keyLocal = NSEvent.addLocalMonitorForEvents(matching: keys) { [weak self] event in
+            self?.handle(event)
+            return event
+        }
         let timer = Timer(timeInterval: 0.03, repeats: true) { [weak self] _ in
             self?.poll()
         }
@@ -523,60 +578,52 @@ final class RightOptionMonitor {
         self.timer = timer
     }
 
-    static func physicalDown() -> Bool {
-        CGEventSource.keyState(.combinedSessionState, key: keyCode)
-    }
-
-    /// keyCode 0x3D is Right Option. A key-state reading that never went true is not a release.
+    /// keyCode 0x3D is Right Option. A key-up ends the hold even when flagsChanged never arrives.
     private func handle(_ event: NSEvent) {
         if event.keyCode == Self.keyCode {
-            apply(pressed(event))
-            return
+            if event.type == .keyUp {
+                finish()
+                return
+            }
+            if event.type == .keyDown {
+                begin()
+                return
+            }
         }
-        let raw = event.modifierFlags.rawValue
-        let deviceBits = raw & 0x0000_207F
-        if down, deviceBits != 0, (raw & Self.deviceFlag) == 0 {
-            apply(false)
-        }
-    }
-
-    private func poll() {
-        let physical = Self.physicalDown()
-        if physical {
-            sawPhysicalDown = true
-            upPolls = 0
-            if globalInstalled { apply(true) }
-            return
-        }
-        guard HoldKey.release(wasDown: down, sawPhysicalDown: sawPhysicalDown, physicalDown: false) else { return }
-        upPolls += 1
-        if upPolls >= 3 {
-            sawPhysicalDown = false
-            apply(false)
-        }
-    }
-
-    private func apply(_ pressed: Bool) {
-        guard let edge = HoldKey.edge(wasDown: down, physicalDown: pressed) else { return }
-        down = edge == .down
-        isDown = down
-        upPolls = 0
+        guard event.type == .flagsChanged else { return }
+        let flags = UInt64(event.modifierFlags.rawValue)
+        guard let edge = HoldKey.event(wasDown: down, keyCode: event.keyCode, flags: flags) else { return }
         if edge == .down {
-            sawPhysicalDown = sawPhysicalDown || Self.physicalDown()
-            onDown()
+            begin()
         } else {
-            sawPhysicalDown = false
-            onUp()
+            finish()
         }
     }
 
-    private func pressed(_ event: NSEvent) -> Bool {
-        let raw = event.modifierFlags.rawValue
-        let deviceBits = raw & 0x0000_207F
-        if deviceBits != 0 {
-            return (raw & Self.deviceFlag) != 0
+    /// Ends the hold once flags state has shown the device bit and then lost it.
+    /// A reading that never had the bit is ignored. Key state is not read.
+    private func poll() {
+        let flags = UInt64(CGEventSource.flagsState(.hidSystemState).rawValue)
+        let decision = HoldKey.flagsRelease(wasDown: down, sawDeviceBit: sawDeviceBit, flags: flags)
+        sawDeviceBit = decision.sawDeviceBit
+        if decision.edge == .up {
+            finish()
         }
-        return event.modifierFlags.contains(.option)
+    }
+
+    private func begin() {
+        guard !down else { return }
+        down = true
+        isDown = true
+        onDown()
+    }
+
+    private func finish() {
+        guard down else { return }
+        down = false
+        isDown = false
+        sawDeviceBit = false
+        onUp()
     }
 }
 
@@ -644,39 +691,10 @@ final class MicRecorder: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Each buffer is converted on its own format. A reused converter drops samples.
+    /// Each buffer is converted from its own samples. A reused converter drops audio.
     private static func sixteenKilohertzInt16(_ buffer: AVAudioPCMBuffer) -> Data {
-        if let converted = convert(buffer), !converted.isEmpty {
-            return converted
-        }
-        guard buffer.format.sampleRate > 0, let mono = monoFloat(buffer) else { return Data() }
+        guard buffer.format.sampleRate > 0, let mono = monoFloat(buffer), !mono.isEmpty else { return Data() }
         return SpeechAudio.int16Data(SpeechAudio.resample(mono, from: buffer.format.sampleRate))
-    }
-
-    private static func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
-        guard buffer.frameLength > 0, buffer.format.sampleRate > 0,
-              let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true),
-              let converter = AVAudioConverter(from: buffer.format, to: target) else {
-            return nil
-        }
-        let ratio = target.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 32
-        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
-        var error: NSError?
-        var fed = false
-        let status = converter.convert(to: output, error: &error) { _, outStatus in
-            if fed {
-                outStatus.pointee = .endOfStream
-                return nil
-            }
-            fed = true
-            outStatus.pointee = .haveData
-            return buffer
-        }
-        guard error == nil, status != .error, output.frameLength > 0, let samples = output.int16ChannelData else {
-            return nil
-        }
-        return Data(bytes: samples[0], count: Int(output.frameLength) * 2)
     }
 
     private static func monoFloat(_ buffer: AVAudioPCMBuffer) -> [Float]? {
