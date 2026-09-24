@@ -40,6 +40,8 @@ cat > "$app/Contents/Info.plist" <<'EOF'
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Kept records while Right Option is held and transcribes that audio on this Mac.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>
