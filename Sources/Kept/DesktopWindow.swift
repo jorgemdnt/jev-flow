@@ -21,6 +21,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     let pages = KeptPages()
     private var statusItem: NSStatusItem?
     private var window: NSWindow?
+    private var onboarding: NSWindow?
     private var livePanel: NSPanel?
     private let menu = NSMenu()
 
@@ -37,6 +38,9 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         item.menu = menu
         TypeSafeKey.adoptEnvironmentKey()
         watch()
+        if LanguageStore.shared.needsOnboarding {
+            openOnboarding()
+        }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -99,8 +103,12 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
-        window = nil
-        NSApp.setActivationPolicy(.accessory)
+        guard let closed = notification.object as? NSWindow else { return }
+        if closed === onboarding { onboarding = nil }
+        if closed === window { window = nil }
+        if window == nil, onboarding == nil {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     private func ensureWindow() -> NSWindow {
@@ -122,6 +130,26 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         self.window = window
         return window
+    }
+
+    private func openOnboarding() {
+        if onboarding != nil { return }
+        let host = NSHostingController(rootView: LanguageOnboarding(store: LanguageStore.shared) { [weak self] in
+            self?.onboarding?.close()
+        })
+        let panel = NSWindow(contentViewController: host)
+        panel.title = "JevFlow"
+        panel.titlebarAppearsTransparent = true
+        panel.titleVisibility = .hidden
+        panel.styleMask = [.titled, .closable, .fullSizeContentView]
+        panel.backgroundColor = .clear
+        panel.isReleasedWhenClosed = false
+        panel.center()
+        panel.delegate = self
+        onboarding = panel
+        NSApp.setActivationPolicy(.regular)
+        panel.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func watch() {
@@ -148,9 +176,13 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         let panel = ensureLive()
         guard let button = statusItem?.button, let window = button.window else { return }
         let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
-        let size = NSSize(width: 280, height: 92)
+        let size = NSSize(width: 288, height: 76)
+        let screen = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+        var x = rect.maxX - size.width
+        if rect.midX < screen.midX { x = rect.minX }
+        x = min(max(x, screen.minX + 8), screen.maxX - size.width - 8)
         panel.setFrame(
-            NSRect(x: rect.midX - size.width / 2, y: rect.minY - size.height - 6, width: size.width, height: size.height),
+            NSRect(x: x, y: rect.minY - size.height - 8, width: size.width, height: size.height),
             display: true
         )
         panel.orderFrontRegardless()
@@ -164,7 +196,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         if let livePanel { return livePanel }
         let host = NSHostingView(rootView: LiveCard(session: session))
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 92),
+            contentRect: NSRect(x: 0, y: 0, width: 288, height: 76),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -249,38 +281,43 @@ private struct LiveCard: View {
     let session: Session
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(caption)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(tail)
-                        .font(.system(size: 13))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .id(tail)
-                }
-                .scrollIndicators(.hidden)
-                .defaultScrollAnchor(.bottom)
-                .onChange(of: session.livePreview) { _, _ in
-                    withAnimation(.easeOut(duration: 0.18)) {
-                        proxy.scrollTo("tail", anchor: .bottom)
-                    }
-                }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                LucideMark(icon: .option, size: 12, color: .secondary)
+                Text(caption)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(mic)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
-            .frame(height: 54)
+            Text(tail)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(12)
-        .frame(width: 280, height: 92, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .animation(.easeOut(duration: 0.18), value: session.livePhase)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(width: 288, height: 76, alignment: .topLeading)
+        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var mic: String {
+        session.microphoneName.isEmpty ? InputDevices.name(uid: MicStore.savedUID()) : session.microphoneName
     }
 
     private var tail: String {
         let text = session.livePreview.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return "…" }
-        guard text.count > 180 else { return text }
-        let start = text.index(text.endIndex, offsetBy: -180)
+        guard text.count > 120 else { return text }
+        let start = text.index(text.endIndex, offsetBy: -120)
         let slice = text[start...]
         guard let space = slice.firstIndex(where: { $0.isWhitespace }) else { return String(slice) }
         let rest = slice[slice.index(after: space)...].trimmingCharacters(in: .whitespaces)
@@ -292,7 +329,7 @@ private struct LiveCard: View {
         case .listening: "Listening"
         case .transcribing: "Transcribing"
         case .cleaning: "Formatting"
-        case .idle: ""
+        case .idle: "Ready"
         }
     }
 }

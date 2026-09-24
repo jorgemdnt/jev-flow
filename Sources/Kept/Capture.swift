@@ -20,6 +20,7 @@ final class Session {
     var lastInsertedText = ""
     var livePhase: LivePhase = .idle
     var livePreview = ""
+    var microphoneName = ""
     let voice = VoiceStore()
 
     static let insertNeedsAccessibility = "Accessibility permission is required to insert. Text kept."
@@ -141,6 +142,7 @@ final class Session {
         let wav = store.wavURL(id: id)
         do {
             try mic.start(url: wav)
+            microphoneName = mic.deviceName
         } catch {
             status = "Could not start the microphone"
             return
@@ -243,6 +245,17 @@ final class Session {
     }
 
     private func transcribe(_ wav: URL) async throws -> String {
+        let code = LanguageStore.currentCode()
+        if SpeechRoute.engine(for: code) == .parakeetV3 {
+            if !ParakeetEngine.isCached {
+                if recording {
+                    if livePreview.isEmpty { livePreview = "Downloading Parakeet…" }
+                } else {
+                    status = "Downloading Parakeet…"
+                }
+            }
+            return try await ParakeetEngine.shared.transcribe(wavPath: wav.path, languageCode: code)
+        }
         let model = try await ModelStore.prepare { message in
             if !self.recording {
                 self.status = message
@@ -265,7 +278,7 @@ final class Session {
             if let captured { _ = removePartial(captured) }
             return Self.keptNotPasted
         }
-        let text = TakeJoin.text(previous: anchor, next: prepared)
+        let text = TakeJoin.submission(previous: anchor, next: prepared)
         guard !text.isEmpty else {
             if let captured { _ = removePartial(captured) }
             return "Hold Right Option to talk"
@@ -383,7 +396,7 @@ final class Session {
             text = take.rawTranscript
             note = nil
         }
-        let inserting = TakeJoin.text(previous: lastInsertedText, next: text)
+        let inserting = TakeJoin.submission(previous: lastInsertedText, next: text)
         guard !inserting.isEmpty else {
             status = "Could not insert. Text kept."
             return
@@ -401,7 +414,8 @@ final class Session {
 
     private func insertStored(id: UUID) async {
         guard let take = takes.first(where: { $0.id == id }) else { return }
-        let text = take.insertedText ?? TakeJoin.text(previous: lastInsertedText, next: Formatter.finished(take.rawTranscript))
+        let stored = take.insertedText ?? Formatter.finished(take.rawTranscript)
+        let text = stored.last?.isWhitespace == true ? stored : stored + " "
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard Self.accessibilityTrusted(prompt: true) else {
             status = Self.insertNeedsAccessibility
@@ -516,6 +530,7 @@ final class MicRecorder: @unchecked Sendable {
     private var engine: AVAudioEngine?
     private var destination: URL?
     private var converter: AVAudioConverter?
+    private(set) var deviceName = ""
 
     func granted() async -> Bool {
         switch AVAudioApplication.shared.recordPermission {
@@ -537,6 +552,7 @@ final class MicRecorder: @unchecked Sendable {
     func start(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let engine = AVAudioEngine()
+        deviceName = InputDevices.apply(uid: MicStore.savedUID(), to: engine)
         let input = engine.inputNode
         let hardware = input.outputFormat(forBus: 0)
         guard hardware.sampleRate > 0, hardware.channelCount > 0 else { throw RecorderError.failed }
@@ -713,7 +729,11 @@ enum WhisperProcess {
     static func transcribe(modelPath: String, wavPath: String) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: WhisperCommand.executablePath)
-        process.arguments = WhisperCommand.arguments(modelPath: modelPath, wavPath: wavPath)
+        process.arguments = WhisperCommand.arguments(
+            modelPath: modelPath,
+            wavPath: wavPath,
+            language: LanguageStore.currentCode()
+        )
         let errors = Pipe()
         process.standardOutput = FileHandle.nullDevice
         process.standardError = errors

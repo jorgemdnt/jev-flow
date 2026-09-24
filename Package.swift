@@ -10,10 +10,20 @@ let package = Package(
     products: [
         .executable(name: "Kept", targets: ["Kept"]),
     ],
+    dependencies: [
+        .package(
+            url: "https://github.com/FluidInference/FluidAudio.git",
+            from: "0.17.2",
+            traits: []
+        ),
+    ],
     targets: [
         .executableTarget(
             name: "Kept",
-            dependencies: ["KeptCore"]
+            dependencies: [
+                "KeptCore",
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ]
         ),
         .target(name: "KeptCore"),
         // Command Line Tools ship Swift Testing as a framework, but `swift test`

@@ -19,8 +19,8 @@ private final class PasteFunction {
 @Test func allowedTakeReachesPasteWithFormattedText() {
     let paste = PasteFunction()
     let delivery = InsertPipeline.afterTake(raw: "orange, err, yellow", durationSeconds: 2, paste: paste.paste)
-    #expect(paste.calls == ["Yellow."])
-    #expect(delivery == .pasted("Yellow."))
+    #expect(paste.calls == ["Yellow. "])
+    #expect(delivery == .pasted("Yellow. "))
     #expect(!paste.calls[0].contains("orange"))
     #expect(!paste.calls[0].contains("or yellow"))
 }
@@ -33,8 +33,8 @@ private final class PasteFunction {
         previousInsertion: "works.",
         paste: paste.paste
     )
-    #expect(paste.calls == [" But it doesn't."])
-    #expect(delivery == .pasted(" But it doesn't."))
+    #expect(paste.calls == [" But it doesn't. "])
+    #expect(delivery == .pasted(" But it doesn't. "))
 }
 
 @Test func newTakeDoesNotAddASpaceWhenThePreviousInsertionAlreadyEndsInWhitespace() {
@@ -45,6 +45,6 @@ private final class PasteFunction {
         previousInsertion: "works. ",
         paste: paste.paste
     )
-    #expect(paste.calls == ["But."])
-    #expect(delivery == .pasted("But."))
+    #expect(paste.calls == ["But. "])
+    #expect(delivery == .pasted("But. "))
 }

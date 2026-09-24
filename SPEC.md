@@ -8,7 +8,9 @@ Wispr Flow's cleanup model is the bug. It renumbers lists, swaps rare words for 
 
 Locked. Do not reopen it.
 
-macOS 15. No Xcode.app. Command Line Tools only. `whisper-cli` comes from Homebrew. Do not use the tiny test model for real dictation.
+macOS 15. No Xcode.app. Command Line Tools only. The default recognizer is NVIDIA Parakeet TDT 0.6B v3, run on this Mac through FluidAudio (CoreML). The weights are CC-BY-4.0. Do not use the tiny whisper test model for real dictation. Do not use a cloud speech API.
+
+A pinned language outside Parakeet's 25 European languages uses Homebrew `whisper-cli`. Auto, English, Portuguese, and the rest of that set do not. Japanese, Korean, and Chinese stay on whisper-cli because v3 romanizes them. Arabic and Hindi stay on whisper-cli because v3 does not support them. The final transcript is a v3 batch. It is not the English-only Parakeet EOU streaming model.
 
 2026 desktop landscape, and why it is not the stack:
 
@@ -19,7 +21,9 @@ macOS 15. No Xcode.app. Command Line Tools only. `whisper-cli` comes from Homebr
 
 ## What it does
 
-Hold Right Option to talk. A card under the menu-bar icon shows the words as they arrive. It does not take keyboard focus. Release pastes the formatted transcript once into the focused field. Click the menu-bar icon for the menu. Open JevFlow for history, dictionary, and settings.
+Hold Right Option to talk. A card under the menu-bar icon shows the words as they arrive, aligned to that icon, and names the microphone in use. It does not take keyboard focus. Parakeet v3 is batch. The card updates when a chunk finishes. Release pastes the formatted transcript once, with a trailing space, into the focused field. Click the menu-bar icon for the menu. Open JevFlow for history, dictionary, and settings. Settings chooses the spoken language and the microphone.
+
+The first launch asks which language you speak. Auto detects it. Auto and a pinned European language go to Parakeet. A pinned language outside that set is passed to whisper-cli. Omitting the language flag makes whisper-cli assume English, so the fallback always passes it.
 
 The final text is formatted by Jev. Jev chooses whether the take is prose, a list, or numbered, and which dictionary span you meant. Code applies that and keeps the words. It does not rewrite the sentence. The TypeSafe key is the one saved in Settings, or `TYPESAFE_API_KEY` in the environment. The key is not copied into the repo. If that call fails, the local text is inserted.
 
@@ -43,7 +47,7 @@ These are tests, not vibes. The formatter is a pure function. It is not a model.
 
 Punctuation and capitalization are allowed only when they do not violate 1–7.
 
-Whisper timestamps stay on. `--no-timestamps` drops the tail of a take.
+Parakeet word timestamps stay on. The transcript is those words joined with spaces. A newline is a segment break, not a chat send. The whisper-cli fallback also keeps timestamps. `--no-timestamps` drops the tail of a take.
 
 ## Insert
 
@@ -54,7 +58,7 @@ Save the pasteboard, paste the accepted text into the focused app with Command-V
 - `SPEC.md` this file
 - `Package.swift` executable target `Kept` plus a test target
 - `Sources/KeptCore/` pure formatter and insert-decision types, no AppKit
-- `Sources/Kept/` menu bar app, hotkey, recorder, whisper-cli runner
+- `Sources/Kept/` menu bar app, hotkey, recorder, recognizer
 - `scripts/package-app.sh` builds `JevFlow.app`
 - `Tests/KeptCoreTests/` the rules above
 - Models live in `~/Library/Application Support/Kept/models/`, never in git

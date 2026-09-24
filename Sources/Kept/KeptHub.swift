@@ -232,6 +232,8 @@ private struct SettingsPage: View {
                 title: "Settings",
                 subtitle: "Jev chooses the format and which dictionary word you meant. It does not rewrite the sentence. Speech stays on this Mac."
             )
+            LanguageSettings(store: LanguageStore.shared)
+            MicrophoneSettings(store: MicStore.shared)
             KeptCard {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(status)
@@ -316,7 +318,7 @@ private struct KeptCard<Content: View>: View {
     }
 }
 
-private struct KeptPrimaryButton: ButtonStyle {
+struct KeptPrimaryButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
@@ -327,7 +329,7 @@ private struct KeptPrimaryButton: ButtonStyle {
     }
 }
 
-private enum KeptColor {
+enum KeptColor {
     static let canvas = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(calibratedWhite: 0.11, alpha: 1)

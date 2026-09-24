@@ -13,7 +13,7 @@ public enum InsertPipeline {
         previousInsertion: String = "",
         paste: (String) -> Void
     ) -> InsertDelivery {
-        let formatted = TakeJoin.text(previous: previousInsertion, next: Formatter.finished(raw))
+        let formatted = TakeJoin.submission(previous: previousInsertion, next: Formatter.finished(raw))
         guard InsertDecision(transcript: raw, durationSeconds: durationSeconds).autoInsert else {
             return .refused(raw: raw, durationSeconds: durationSeconds)
         }

@@ -47,4 +47,13 @@ public enum TakeJoin {
         }
         return " " + next
     }
+
+    /// The text that is pasted. Always ends with one space, so the next
+    /// submission does not depend on the following take remembering to join.
+    public static func submission(previous: String, next: String) -> String {
+        let joined = text(previous: previous, next: next)
+        guard !joined.isEmpty else { return "" }
+        if joined.last?.isWhitespace == true { return joined }
+        return joined + " "
+    }
 }

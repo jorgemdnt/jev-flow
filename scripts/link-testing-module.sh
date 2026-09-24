@@ -7,5 +7,6 @@ source="/Library/Developer/CommandLineTools/Library/Developer/Frameworks/Testing
 
 mkdir -p "$root/Vendor/modules"
 ln -sfn "$source" "$root/Vendor/modules/Testing.swiftmodule"
+rm -rf "$modules"
 mkdir -p "$(dirname "$modules")"
 ln -sfn ../../../Vendor/modules "$modules"
