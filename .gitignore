@@ -1,5 +1,6 @@
 .build/
 .swiftpm/
+.worktrees/
 .derived/
 *.app
 *.xcodeproj
@@ -7,3 +8,5 @@
 .DS_Store
 Models/
 *.bin
+Vendor/modules/*
+!Vendor/modules/Testing.swiftmodule
