@@ -13,15 +13,24 @@ final class Session {
     var lastInsertedText = ""
 
     static let insertNeedsAccessibility = "Accessibility permission is required to insert. Text kept."
+    static let keptNotPasted = "Kept this take and did not paste it."
+    static let caretMarkUnavailable = "Caret mark unavailable."
 
     @ObservationIgnored private let store: TakeStore
     @ObservationIgnored private let monitor = RightOptionMonitor()
     @ObservationIgnored private let mic = MicRecorder()
+    @ObservationIgnored private let whisper = WhisperSerial()
+    @ObservationIgnored private let caret = CaretMark()
     @ObservationIgnored private var held = false
     @ObservationIgnored private var busy = false
     @ObservationIgnored private var arming = false
     @ObservationIgnored private var activeWav: URL?
     @ObservationIgnored private var activeID: UUID?
+    @ObservationIgnored private var anchor = ""
+    @ObservationIgnored private var partial: FieldPartial?
+    @ObservationIgnored private var partialTask: Task<Void, Never>?
+    @ObservationIgnored private var finishTask: Task<Void, Never>?
+    var caretNote = ""
 
     init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory)) {
         self.store = store
@@ -36,6 +45,9 @@ final class Session {
             Task { @MainActor in self?.endHold() }
         }
         monitor.start()
+        caret.onNote = { [weak self] note in
+            self?.caretNote = note
+        }
         if !monitor.globalInstalled || !Self.accessibilityTrusted(prompt: true) {
             status = "Accessibility permission is required to hear Right Option"
         }
@@ -43,7 +55,7 @@ final class Session {
 
     func beginHold() {
         held = true
-        guard !recording, !busy else { return }
+        guard !recording else { return }
         Task { await startRecordingIfStillHeld() }
     }
 
@@ -56,7 +68,15 @@ final class Session {
         activeID = nil
         busy = true
         status = "Transcribing…"
-        Task { await finish(id: id, wav: wav, duration: duration) }
+        let streaming = partialTask
+        partialTask = nil
+        let captured = partial
+        partial = nil
+        let base = anchor
+        finishTask = Task {
+            await streaming?.value
+            await self.finish(id: id, wav: wav, duration: duration, partial: captured, anchor: base)
+        }
     }
 
     func dismiss(_ id: UUID) {
@@ -83,7 +103,7 @@ final class Session {
     }
 
     func keptText(_ take: Take) -> String {
-        Formatter.format(take.rawTranscript)
+        Formatter.finished(take.rawTranscript)
     }
 
     func insertRaw(_ id: UUID) {
@@ -95,14 +115,14 @@ final class Session {
     }
 
     private func startRecordingIfStillHeld() async {
-        guard held, !recording, !busy, !arming else { return }
+        guard held, !recording, !arming else { return }
         arming = true
         defer { arming = false }
         guard await mic.granted() else {
             status = "Microphone permission is off"
             return
         }
-        guard held, !recording, !busy else { return }
+        guard held, !recording else { return }
         let id = UUID()
         let wav = store.wavURL(id: id)
         do {
@@ -118,50 +138,206 @@ final class Session {
         }
         activeID = id
         activeWav = wav
+        anchor = lastInsertedText
         recording = true
         status = "Recording…"
+        caret.show()
+        let previousFinish = finishTask
+        partialTask = Task {
+            await previousFinish?.value
+            guard await MainActor.run(body: { self.recording && self.activeID == id }) else { return }
+            await MainActor.run { self.anchor = self.lastInsertedText }
+            await self.streamPartials(id: id)
+        }
     }
 
-    private func finish(id: UUID, wav: URL, duration: Double) async {
+    private func streamPartials(id: UUID) async {
+        var lastBytes = 0
+        while recording, activeID == id {
+            guard let snap = mic.snapshot() else {
+                try? await Task.sleep(for: .milliseconds(200))
+                continue
+            }
+            if snap.bytes < 16_000 || snap.bytes < lastBytes + 16_000 {
+                try? FileManager.default.removeItem(at: snap.url)
+                try? await Task.sleep(for: .milliseconds(200))
+                continue
+            }
+            lastBytes = snap.bytes
+            let raw: String
+            do {
+                raw = try await transcribe(snap.url)
+            } catch {
+                try? FileManager.default.removeItem(at: snap.url)
+                try? await Task.sleep(for: .milliseconds(300))
+                continue
+            }
+            try? FileManager.default.removeItem(at: snap.url)
+            guard recording, activeID == id else { return }
+            let text = TakeJoin.text(previous: anchor, next: Formatter.streaming(raw))
+            guard !text.isEmpty else { continue }
+            publish(text)
+        }
+    }
+
+    private func finish(id: UUID, wav: URL, duration: Double, partial captured: FieldPartial?, anchor: String) async {
         defer {
             busy = false
+            if !recording {
+                caret.hide()
+            }
             if held { Task { await startRecordingIfStillHeld() } }
         }
         let transcript: String
         do {
-            status = "Transcribing…"
-            let model = try await ModelStore.prepare { message in
-                self.status = message
-            }
-            transcript = try await Task.detached {
-                try WhisperProcess.transcribe(modelPath: model.path, wavPath: wav.path)
-            }.value
+            if !recording { status = "Transcribing…" }
+            transcript = try await transcribe(wav)
         } catch {
-            status = error.localizedDescription
+            if !recording { status = error.localizedDescription }
             remember(id: id, wav: wav, transcript: "", duration: duration)
             return
         }
         remember(id: id, wav: wav, transcript: transcript, duration: duration)
-        status = insert(id: id, raw: transcript, duration: duration)
+        let decision = InsertDecision(transcript: transcript, durationSeconds: duration)
+        let outcome: CleanupOutcome
+        if decision.autoInsert {
+            if !recording { status = "Cleaning up…" }
+            outcome = await LunaCleanup.prepare(raw: transcript)
+        } else {
+            outcome = .local("", note: "")
+        }
+        let message = deliver(
+            id: id,
+            raw: transcript,
+            duration: duration,
+            partial: captured,
+            anchor: anchor,
+            prepared: outcome.text,
+            cleanupNote: outcome.note
+        )
+        if !recording { status = message }
     }
 
-    private func insert(id: UUID, raw: String, duration: Double) -> String {
-        var blocked: String?
-        let delivery = InsertPipeline.afterTake(raw: raw, durationSeconds: duration) { text in
-            guard !text.isEmpty else { return }
-            switch FocusedAppPaste.paste(text) {
-            case .pasted:
-                self.recordInserted(id: id, text: text)
-            case .accessibilityMissing:
-                blocked = Self.insertNeedsAccessibility
-            case .failed:
-                blocked = "Could not insert. Text kept."
+    private func transcribe(_ wav: URL) async throws -> String {
+        let model = try await ModelStore.prepare { message in
+            if !self.recording {
+                self.status = message
             }
         }
-        if case .refused = delivery {
+        return try await whisper.transcribe(modelPath: model.path, wavPath: wav.path)
+    }
+
+    private func deliver(
+        id: UUID,
+        raw: String,
+        duration: Double,
+        partial captured: FieldPartial?,
+        anchor: String,
+        prepared: String,
+        cleanupNote: String?
+    ) -> String {
+        let decision = InsertDecision(transcript: raw, durationSeconds: duration)
+        guard decision.autoInsert else {
+            if let captured { _ = removePartial(captured) }
+            return Self.keptNotPasted
+        }
+        let text = TakeJoin.text(previous: anchor, next: prepared)
+        guard !text.isEmpty else {
+            if let captured { _ = removePartial(captured) }
             return "Hold Right Option to talk"
         }
-        return blocked ?? "Hold Right Option to talk"
+        let idle = (cleanupNote?.isEmpty == false) ? cleanupNote! : "Hold Right Option to talk"
+        if let captured {
+            guard let updated = replace(captured, with: text) else {
+                return "Could not replace the partial. Text kept."
+            }
+            recordInserted(id: id, text: updated.text)
+            return idle
+        }
+        switch place(text) {
+        case .placed(let placed):
+            recordInserted(id: id, text: placed.text)
+            return idle
+        case .accessibilityMissing:
+            return Self.insertNeedsAccessibility
+        case .wouldReplaceSelection:
+            return "Could not insert without replacing a selection. Text kept."
+        case .failed:
+            return "Could not insert. Text kept."
+        }
+    }
+
+    private func publish(_ text: String) {
+        if let partial {
+            guard text != partial.text else { return }
+            guard let updated = replace(partial, with: text) else {
+                status = "Could not replace the partial. Text kept."
+                return
+            }
+            self.partial = updated
+            return
+        }
+        switch FocusedField.caretForInsert() {
+        case .location(let location):
+            switch FocusedAppPaste.paste(text) {
+            case .pasted:
+                partial = FieldPartial(location: location, text: text)
+            case .accessibilityMissing:
+                status = Self.insertNeedsAccessibility
+            case .failed:
+                status = "Could not insert. Text kept."
+            }
+        case .selectionCouldNotCollapse:
+            status = "Could not insert without replacing a selection. Text kept."
+        case .unavailable:
+            return
+        }
+    }
+
+    private func place(_ text: String) -> PlaceResult {
+        switch FocusedField.caretForInsert() {
+        case .location(let location):
+            switch FocusedAppPaste.paste(text) {
+            case .pasted:
+                return .placed(FieldPartial(location: location, text: text))
+            case .accessibilityMissing:
+                return .accessibilityMissing
+            case .failed:
+                return .failed
+            }
+        case .selectionCouldNotCollapse:
+            return .wouldReplaceSelection
+        case .unavailable:
+            switch FocusedAppPaste.paste(text) {
+            case .pasted:
+                return .placed(FieldPartial(location: -1, text: text))
+            case .accessibilityMissing:
+                return .accessibilityMissing
+            case .failed:
+                return .failed
+            }
+        }
+    }
+
+    private func replace(_ partial: FieldPartial, with text: String) -> FieldPartial? {
+        guard partial.location >= 0 else { return nil }
+        let length = (partial.text as NSString).length
+        guard FocusedField.select(location: partial.location, length: length) else { return nil }
+        guard FocusedField.selectedText() == partial.text else { return nil }
+        switch FocusedAppPaste.paste(text) {
+        case .pasted:
+            return FieldPartial(location: partial.location, text: text)
+        default:
+            return nil
+        }
+    }
+
+    private func removePartial(_ partial: FieldPartial) -> Bool {
+        guard partial.location >= 0 else { return false }
+        let length = (partial.text as NSString).length
+        guard FocusedField.select(location: partial.location, length: length) else { return false }
+        guard FocusedField.selectedText() == partial.text else { return false }
+        return FocusedField.deleteSelection()
     }
 
     private func insertManually(id: UUID, formatted: Bool) async {
@@ -172,15 +348,26 @@ final class Session {
         }
         try? await Task.sleep(for: .milliseconds(80))
         await FocusedAppPaste.focusForeignAppIfNeeded()
-        let text = formatted ? Formatter.format(take.rawTranscript) : take.rawTranscript
-        guard !text.isEmpty else {
+        let text: String
+        let note: String?
+        if formatted {
+            status = "Cleaning up…"
+            let outcome = await LunaCleanup.prepare(raw: take.rawTranscript)
+            text = outcome.text
+            note = outcome.note
+        } else {
+            text = take.rawTranscript
+            note = nil
+        }
+        let inserting = TakeJoin.text(previous: lastInsertedText, next: text)
+        guard !inserting.isEmpty else {
             status = "Could not insert. Text kept."
             return
         }
-        switch FocusedAppPaste.paste(text) {
+        switch FocusedAppPaste.paste(inserting) {
         case .pasted:
-            recordInserted(id: id, text: text)
-            status = "Hold Right Option to talk"
+            recordInserted(id: id, text: inserting)
+            status = (note?.isEmpty == false) ? note! : "Hold Right Option to talk"
         case .accessibilityMissing:
             status = Self.insertNeedsAccessibility
         case .failed:
@@ -216,6 +403,26 @@ final class Session {
     private static func accessibilityTrusted(prompt: Bool) -> Bool {
         let options = ["AXTrustedCheckOptionPrompt": prompt] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
+    }
+}
+
+private struct FieldPartial: Equatable {
+    var location: Int
+    var text: String
+}
+
+private enum PlaceResult {
+    case placed(FieldPartial)
+    case accessibilityMissing
+    case wouldReplaceSelection
+    case failed
+}
+
+private actor WhisperSerial {
+    func transcribe(modelPath: String, wavPath: String) async throws -> String {
+        try await Task.detached {
+            try WhisperProcess.transcribe(modelPath: modelPath, wavPath: wavPath)
+        }.value
     }
 }
 
@@ -257,9 +464,12 @@ final class RightOptionMonitor {
     }
 }
 
-@MainActor
-final class MicRecorder {
-    private var recorder: AVAudioRecorder?
+final class MicRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pcm = Data()
+    private var engine: AVAudioEngine?
+    private var destination: URL?
+    private var converter: AVAudioConverter?
 
     func granted() async -> Bool {
         switch AVAudioApplication.shared.recordPermission {
@@ -280,30 +490,107 @@ final class MicRecorder {
 
     func start(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatLinearPCM),
-            AVSampleRateKey: 16_000,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsFloatKey: false,
-            AVLinearPCMIsBigEndianKey: false,
-        ]
-        let recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder.prepareToRecord()
-        guard recorder.record() else { throw RecorderError.failed }
-        self.recorder = recorder
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let hardware = input.outputFormat(forBus: 0)
+        guard hardware.sampleRate > 0, hardware.channelCount > 0 else { throw RecorderError.failed }
+        guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true),
+              let converter = AVAudioConverter(from: hardware, to: target) else {
+            throw RecorderError.failed
+        }
+        lock.lock()
+        pcm.removeAll(keepingCapacity: true)
+        lock.unlock()
+        self.converter = converter
+        self.destination = url
+        input.installTap(onBus: 0, bufferSize: 4096, format: hardware) { [weak self] buffer, _ in
+            self?.append(buffer)
+        }
+        engine.prepare()
+        try engine.start()
+        self.engine = engine
     }
 
     func stop() -> Double {
-        let duration = recorder?.currentTime ?? 0
-        recorder?.stop()
-        recorder = nil
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
+        engine = nil
+        converter = nil
+        let duration = writeKeptFile()
         return duration
+    }
+
+    func snapshot() -> (url: URL, bytes: Int)? {
+        lock.lock()
+        let data = pcm
+        let folder = destination?.deletingLastPathComponent()
+        lock.unlock()
+        guard data.count >= 2, let folder else { return nil }
+        let url = folder.appendingPathComponent(".\(UUID().uuidString).partial.wav")
+        do {
+            try WavPCM.encode(pcm: data).write(to: url)
+            return (url, data.count)
+        } catch {
+            return nil
+        }
+    }
+
+    private func append(_ buffer: AVAudioPCMBuffer) {
+        guard let converter else { return }
+        let target = converter.outputFormat
+        let ratio = target.sampleRate / max(buffer.format.sampleRate, 1)
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
+        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+        var error: NSError?
+        let feed = PCMFeed(buffer)
+        converter.convert(to: output, error: &error) { _, status in
+            guard let buffer = feed.take() else {
+                status.pointee = .noDataNow
+                return nil
+            }
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, let samples = output.int16ChannelData else { return }
+        let count = Int(output.frameLength) * 2
+        guard count > 0 else { return }
+        let chunk = Data(bytes: samples[0], count: count)
+        lock.lock()
+        pcm.append(chunk)
+        lock.unlock()
+    }
+
+    private func writeKeptFile() -> Double {
+        lock.lock()
+        let data = pcm
+        let url = destination
+        lock.unlock()
+        guard let url else { return 0 }
+        try? WavPCM.encode(pcm: data).write(to: url)
+        return WavPCM.durationSeconds(pcmByteCount: data.count)
     }
 }
 
 private enum RecorderError: Error {
     case failed
+}
+
+private final class PCMFeed: @unchecked Sendable {
+    private let buffer: AVAudioPCMBuffer
+    private let lock = NSLock()
+    private var pending = true
+
+    init(_ buffer: AVAudioPCMBuffer) {
+        self.buffer = buffer
+    }
+
+    func take() -> AVAudioPCMBuffer? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard pending else { return nil }
+        pending = false
+        return buffer
+    }
 }
 
 enum ModelStore {
@@ -397,7 +684,7 @@ enum WhisperProcess {
         let txt = WhisperCommand.transcriptURL(wavPath: wavPath)
         let raw = (try? String(contentsOf: txt, encoding: .utf8)) ?? ""
         try? FileManager.default.removeItem(at: txt)
-        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WhisperCommand.transcriptText(fileContents: raw)
     }
 }
 

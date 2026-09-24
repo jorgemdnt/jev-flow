@@ -65,3 +65,37 @@ func formatterKeepsGuardWord(_ word: String) {
     #expect(Formatter.format("ask her") == "ask her")
     #expect(Formatter.format("orange or yellow") == "orange or yellow")
 }
+
+@Test func finishedTakeCapitalizesAndEndsWithAPeriod() {
+    #expect(Formatter.finished("okay, it seems like it works") == "Okay, it seems like it works.")
+}
+
+@Test func finishedTakeKeepsTerminalPunctuation() {
+    #expect(Formatter.finished("Okay, it seems like it works.") == "Okay, it seems like it works.")
+    #expect(Formatter.finished("does it work?") == "Does it work?")
+}
+
+@Test func finishedTakeDoesNotRenumberOrDropGuardWords() {
+    let text = Formatter.finished("5. alpha\n6. beta I'd prefer to never not haven't hadn't before like auth")
+    #expect(text.contains("5. alpha"))
+    #expect(text.contains("6. beta"))
+    #expect(!text.contains("1. alpha"))
+    #expect(text.contains("never"))
+    #expect(text.contains("not"))
+    #expect(text.contains("haven't"))
+    #expect(text.contains("hadn't"))
+    #expect(text.contains("before"))
+    #expect(text.contains("like"))
+    #expect(text.contains("auth"))
+    #expect(text != "off")
+}
+
+@Test func finishedTakeDoesNotTurnErrIntoOr() {
+    let text = Formatter.finished("I want the color to be orange, err, yellow")
+    #expect(text == "I want the color to be yellow.")
+    #expect(!text.contains("or yellow"))
+}
+
+@Test func streamingPartialDoesNotForceAPeriod() {
+    #expect(Formatter.streaming("it puts the phrases together") == "It puts the phrases together")
+}

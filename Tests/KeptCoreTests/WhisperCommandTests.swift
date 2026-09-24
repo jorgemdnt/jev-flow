@@ -21,6 +21,25 @@ import Testing
     #expect(WhisperCommand.executablePath == "/opt/homebrew/bin/whisper-cli")
 }
 
+@Test func whisperInvocationKeepsTimestampsSoTheTailIsNotDropped() {
+    let args = WhisperCommand.arguments(modelPath: "/m", wavPath: "/t.wav")
+    #expect(!args.contains("--no-timestamps"))
+    #expect(args.contains("--output-txt"))
+    #expect(argument("--prompt", in: args) == "auth")
+}
+
+@Test func whisperTranscriptJoinsSegmentBreaksWithoutDroppingTheTail() {
+    let file = """
+    But it doesn't put spaces in between the phrases, like after I stop holding my ALT, I write the right option
+    Say I stop holding it and then I start holding it again, it puts the two phrases together
+    """
+    let text = WhisperCommand.transcriptText(fileContents: file)
+    #expect(text.contains("I write the right option"))
+    #expect(text.contains("it puts the two phrases together"))
+    #expect(!text.contains("\n"))
+    #expect(text == "But it doesn't put spaces in between the phrases, like after I stop holding my ALT, I write the right option Say I stop holding it and then I start holding it again, it puts the two phrases together")
+}
+
 private func argument(_ name: String, in args: [String]) -> String? {
     guard let index = args.firstIndex(of: name), args.index(after: index) < args.endIndex else { return nil }
     return args[args.index(after: index)]

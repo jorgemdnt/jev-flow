@@ -15,16 +15,29 @@ public enum WhisperCommand {
     }
 
     /// `-p` is processors. The initial prompt is `--prompt`.
+    ///
+    /// Timestamps stay on. `--no-timestamps` decodes the window in one pass
+    /// and stops early. On a 23.8s take that dropped the tail
+    /// ("it puts the two phrases together").
     public static func arguments(modelPath: String, wavPath: String) -> [String] {
         [
             "--model", modelPath,
             "--file", wavPath,
             "--prompt", initialPrompt,
-            "--no-timestamps",
             "--no-prints",
             "--output-txt",
             "--output-file", transcriptBase(wavPath: wavPath),
         ]
+    }
+
+    /// The txt file breaks segments with newlines. Join them so the tail is
+    /// kept and a chat field does not send on the segment break.
+    public static func transcriptText(fileContents: String) -> String {
+        fileContents
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     public static func transcriptURL(wavPath: String) -> URL {
