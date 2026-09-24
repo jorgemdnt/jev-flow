@@ -52,8 +52,47 @@ EOF
 
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
-codesign --force --sign - "$app"
+codesign --force --sign - --identifier local.kept.app \
+    -r='designated => identifier "local.kept.app"' \
+    "$app"
 codesign --verify --strict "$app"
 
 test -x "$app/Contents/MacOS/Kept"
 test "$(plutil -extract LSUIElement raw "$app/Contents/Info.plist")" = "true"
+
+# Install for this user only. Never write under /Applications, and never
+# touch /Applications/Hermes.app.
+hermes="/Applications/Hermes.app"
+hermes_stamp=""
+if [ -e "$hermes" ]; then
+    hermes_stamp=$(stat -f '%i %m %z' "$hermes" "$hermes/Contents/MacOS/Hermes")
+fi
+
+install_dir="$HOME/Applications"
+case "$install_dir" in
+    /Applications|/Applications/*)
+        echo "refusing to install into /Applications" >&2
+        exit 1
+        ;;
+esac
+
+mkdir -p "$install_dir"
+installed="$install_dir/Kept.app"
+if [ -L "$installed" ]; then
+    rm -f "$installed"
+elif [ -e "$installed" ]; then
+    rm -rf "$installed"
+fi
+ditto "$app" "$installed"
+codesign --force --sign - --identifier local.kept.app \
+    -r='designated => identifier "local.kept.app"' \
+    "$installed"
+codesign --verify --strict "$installed"
+test -x "$installed/Contents/MacOS/Kept"
+test "$(plutil -extract LSUIElement raw "$installed/Contents/Info.plist")" = "true"
+test "$(plutil -extract CFBundleIdentifier raw "$installed/Contents/Info.plist")" = "local.kept.app"
+
+if [ -n "$hermes_stamp" ]; then
+    hermes_now=$(stat -f '%i %m %z' "$hermes" "$hermes/Contents/MacOS/Hermes")
+    test "$hermes_stamp" = "$hermes_now"
+fi

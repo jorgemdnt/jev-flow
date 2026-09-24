@@ -5,12 +5,20 @@ public struct Take: Codable, Equatable, Identifiable, Sendable {
     public let wavPath: String
     public let rawTranscript: String
     public let durationSeconds: Double
+    public var insertedText: String?
 
-    public init(id: UUID, wavPath: String, rawTranscript: String, durationSeconds: Double) {
+    public init(
+        id: UUID,
+        wavPath: String,
+        rawTranscript: String,
+        durationSeconds: Double,
+        insertedText: String? = nil
+    ) {
         self.id = id
         self.wavPath = wavPath
         self.rawTranscript = rawTranscript
         self.durationSeconds = durationSeconds
+        self.insertedText = insertedText
     }
 }
 

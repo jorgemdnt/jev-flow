@@ -10,6 +10,9 @@ final class Session {
     var status = "Hold Right Option to talk"
     var recording = false
     var takes: [Take] = []
+    var lastInsertedText = ""
+
+    static let insertNeedsAccessibility = "Accessibility permission is required to insert. Text kept."
 
     @ObservationIgnored private let store: TakeStore
     @ObservationIgnored private let monitor = RightOptionMonitor()
@@ -23,6 +26,7 @@ final class Session {
     init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory)) {
         self.store = store
         takes = (try? store.load()) ?? []
+        lastInsertedText = Self.readLastInserted() ?? takes.compactMap(\.insertedText).first ?? ""
         try? FileManager.default.createDirectory(at: KeptPaths.takesDirectory, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: KeptPaths.modelsDirectory, withIntermediateDirectories: true)
         monitor.onDown = { [weak self] in
@@ -64,6 +68,30 @@ final class Session {
             try? FileManager.default.removeItem(atPath: take.wavPath)
         }
         takes.removeAll { $0.id == id }
+    }
+
+    var canInsert: Bool {
+        Self.accessibilityTrusted(prompt: false)
+    }
+
+    var lastRawTranscript: String {
+        takes.first?.rawTranscript ?? ""
+    }
+
+    func refusesAutoInsert(_ take: Take) -> Bool {
+        !InsertDecision(transcript: take.rawTranscript, durationSeconds: take.durationSeconds).autoInsert
+    }
+
+    func keptText(_ take: Take) -> String {
+        Formatter.format(take.rawTranscript)
+    }
+
+    func insertRaw(_ id: UUID) {
+        Task { await insertManually(id: id, formatted: false) }
+    }
+
+    func insertKept(_ id: UUID) {
+        Task { await insertManually(id: id, formatted: true) }
     }
 
     private func startRecordingIfStillHeld() async {
@@ -114,7 +142,69 @@ final class Session {
             return
         }
         remember(id: id, wav: wav, transcript: transcript, duration: duration)
-        status = "Hold Right Option to talk"
+        status = insert(id: id, raw: transcript, duration: duration)
+    }
+
+    private func insert(id: UUID, raw: String, duration: Double) -> String {
+        var blocked: String?
+        let delivery = InsertPipeline.afterTake(raw: raw, durationSeconds: duration) { text in
+            guard !text.isEmpty else { return }
+            switch FocusedAppPaste.paste(text) {
+            case .pasted:
+                self.recordInserted(id: id, text: text)
+            case .accessibilityMissing:
+                blocked = Self.insertNeedsAccessibility
+            case .failed:
+                blocked = "Could not insert. Text kept."
+            }
+        }
+        if case .refused = delivery {
+            return "Hold Right Option to talk"
+        }
+        return blocked ?? "Hold Right Option to talk"
+    }
+
+    private func insertManually(id: UUID, formatted: Bool) async {
+        guard let take = takes.first(where: { $0.id == id }) else { return }
+        guard Self.accessibilityTrusted(prompt: true) else {
+            status = Self.insertNeedsAccessibility
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(80))
+        await FocusedAppPaste.focusForeignAppIfNeeded()
+        let text = formatted ? Formatter.format(take.rawTranscript) : take.rawTranscript
+        guard !text.isEmpty else {
+            status = "Could not insert. Text kept."
+            return
+        }
+        switch FocusedAppPaste.paste(text) {
+        case .pasted:
+            recordInserted(id: id, text: text)
+            status = "Hold Right Option to talk"
+        case .accessibilityMissing:
+            status = Self.insertNeedsAccessibility
+        case .failed:
+            status = "Could not insert. Text kept."
+        }
+    }
+
+    private func recordInserted(id: UUID, text: String) {
+        if let index = takes.firstIndex(where: { $0.id == id }) {
+            var take = takes[index]
+            take.insertedText = text
+            takes[index] = take
+            try? store.save(takes)
+        }
+        lastInsertedText = text
+        let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private static func readLastInserted() -> String? {
+        let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
+        guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return nil }
+        return text
     }
 
     private func remember(id: UUID, wav: URL, transcript: String, duration: Double) {
