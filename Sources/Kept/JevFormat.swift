@@ -135,12 +135,18 @@ enum TypeSafeKey {
     private static let account = "typesafe"
 
     static func adoptEnvironmentKey() {
-        guard SecretKeychain.load(account: account) == nil else { return }
+        guard load() == nil else { return }
         if let key = ProcessInfo.processInfo.environment["TYPESAFE_API_KEY"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !key.isEmpty {
             _ = save(key)
+            return
         }
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".hermes/typesafe.env")
+        guard let text = try? String(contentsOf: url, encoding: .utf8),
+              let key = TypeSafeEnv.key(in: text) else { return }
+        _ = save(key)
     }
 
     static func load() -> String? {

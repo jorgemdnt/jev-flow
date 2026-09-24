@@ -25,7 +25,7 @@ Hold Right Option to talk. A card under the menu-bar icon shows the words as the
 
 The first launch asks which language you speak. Auto detects it. Auto and a pinned European language go to Parakeet. A pinned language outside that set is passed to whisper-cli. Omitting the language flag makes whisper-cli assume English, so the fallback always passes it.
 
-The final text is formatted by Jev. Jev chooses whether the take is prose, a list, or numbered, and which dictionary span you meant. Code applies that and keeps the words. It does not rewrite the sentence. The TypeSafe key is the one saved in Settings, or `TYPESAFE_API_KEY` in the environment. The key is not copied into the repo. If that call fails, the local text is inserted.
+The final text is formatted by Jev. Jev chooses whether the take is prose, a list, or numbered, and which dictionary span you meant. Code applies that and keeps the words. It does not rewrite the sentence. The TypeSafe key is the one saved in Settings, or `TYPESAFE_API_KEY` in the environment. The app stores it in the data protection keychain under the name JevFlow. It does not read the login keychain, so a rebuild does not ask for the login password. The key is not copied into the repo. If that call fails, the local text is inserted.
 
 A mark sits on the focused app's Accessibility caret while recording and while transcribing. If Accessibility is missing, say so in the menu. Do not use a mark near the mouse instead.
 
