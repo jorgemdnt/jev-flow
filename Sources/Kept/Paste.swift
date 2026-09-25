@@ -68,20 +68,24 @@ enum FocusedAppPaste {
             return false
         }
         down.flags = .maskCommand
-        up.flags = .maskCommand
+        up.flags = []
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
         return true
     }
 
     /// A typed space. Paste trimming drops a trailing space, so the separator
-    /// between takes cannot live only in the pasteboard string.
+    /// between takes cannot live only in the pasteboard string. Flags are cleared:
+    /// the source copies live modifier state, and a Command left from the paste
+    /// turns this into Command-Space, which opens Spotlight.
     static func typeSpace() -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: 0x31, keyDown: false) else {
             return false
         }
+        down.flags = []
+        up.flags = []
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
         return true
