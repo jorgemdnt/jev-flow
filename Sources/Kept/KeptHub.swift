@@ -173,7 +173,7 @@ private struct DictionaryPage: View {
         VStack(alignment: .leading, spacing: 16) {
             KeptHeader(
                 title: "Dictionary",
-                subtitle: "Names and product terms. If you say one, cleanup keeps that spelling."
+                subtitle: "Names and product terms. A unique name pastes as the @handle."
             )
             HStack(spacing: 8) {
                 TextField("Add a word", text: $draft)

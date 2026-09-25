@@ -1,18 +1,22 @@
 import Foundation
-import Security
 import Testing
 @testable import KeptCore
 
-@Test func keychainQueryStaysOffTheLoginKeychain() {
-    let load = KeychainQuery.load(account: "typesafe")
-    let save = KeychainQuery.save(account: "typesafe", secret: Data("not-a-real-key".utf8))
-    let delete = KeychainQuery.delete(account: "typesafe")
-    for query in [load, save, delete] {
-        #expect(query[kSecAttrService as String] as? String == "JevFlow")
-        #expect(query[kSecUseDataProtectionKeychain as String] as? Bool == true)
-        #expect(query[kSecAttrService as String] as? String != "local.kept.app")
-    }
-    #expect(KeychainQuery.service != "local.kept.app")
+@Test func aSavedKeyIsReadableOnlyByThisUser() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    #expect(SecretFile.save("  secret  ", account: "typesafe", directory: directory))
+    #expect(SecretFile.load(account: "typesafe", directory: directory) == "secret")
+    #expect(SecretFile.permissions(account: "typesafe", directory: directory) == 0o600)
+    SecretFile.delete(account: "typesafe", directory: directory)
+    #expect(SecretFile.load(account: "typesafe", directory: directory) == nil)
+}
+
+@Test func anEmptyKeyIsNotSaved() {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    #expect(SecretFile.save("   ", account: "typesafe", directory: directory) == false)
+    #expect(SecretFile.save("secret", account: "../typesafe", directory: directory) == false)
 }
 
 @Test func typeSafeEnvReadsTheKeyAndSkipsComments() {

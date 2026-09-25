@@ -384,8 +384,8 @@ final class Session {
         case .selectionCouldNotCollapse:
             return .wouldReplaceSelection
         case .location, .unavailable:
-            let payload = separatorTyped(text, needed: typeSeparator)
-            switch FocusedAppPaste.paste(payload) {
+            if typeSeparator { _ = FocusedAppPaste.typeSpace() }
+            switch FocusedAppPaste.paste(text) {
             case .pasted:
                 return .placed(text)
             case .accessibilityMissing:
@@ -394,13 +394,6 @@ final class Session {
                 return .failed
             }
         }
-    }
-
-    /// Types the separator, then returns the paste without that leading space.
-    /// A failed keystroke leaves the space in the paste.
-    private func separatorTyped(_ text: String, needed: Bool) -> String {
-        guard needed, text.first?.isWhitespace == true, FocusedAppPaste.typeSpace() else { return text }
-        return String(text.dropFirst())
     }
 
     private func clearListening() {
@@ -454,10 +447,10 @@ final class Session {
             status = "Could not insert. Text kept."
             return
         }
-        let payload = separatorTyped(
-            inserting,
-            needed: TakeJoin.needsSeparator(previous: lastInsertedText, next: text, field: field)
-        )
+        let payload = inserting
+        if TakeJoin.needsSeparator(previous: lastInsertedText, next: text, field: field) {
+            _ = FocusedAppPaste.typeSpace()
+        }
         switch FocusedAppPaste.paste(payload) {
         case .pasted:
             recordInserted(id: id, text: inserting)

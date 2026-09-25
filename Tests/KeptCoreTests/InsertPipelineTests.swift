@@ -33,8 +33,8 @@ private final class PasteFunction {
         previousInsertion: "works.",
         paste: paste.paste
     )
-    #expect(paste.calls == [" But it doesn't. "])
-    #expect(delivery == .pasted(" But it doesn't. "))
+    #expect(paste.calls == ["But it doesn't. "])
+    #expect(delivery == .pasted("But it doesn't. "))
 }
 
 @Test func newTakeDoesNotAddASpaceWhenTheFieldAlreadyEndsInWhitespace() {
@@ -59,11 +59,11 @@ private final class PasteFunction {
         field: .needsSpace,
         paste: paste.paste
     )
-    #expect(paste.calls == [" But. "])
-    #expect(delivery == .pasted(" But. "))
+    #expect(paste.calls == ["But. "])
+    #expect(delivery == .pasted("But. "))
 }
 
-@Test func anUnreadFieldStillSeparatesALaterTake() {
+@Test func anUnreadFieldDoesNotStartWithASpace() {
     let paste = PasteFunction()
     let delivery = InsertPipeline.afterTake(
         raw: "but",
@@ -71,6 +71,7 @@ private final class PasteFunction {
         previousInsertion: "works. ",
         paste: paste.paste
     )
-    #expect(paste.calls == [" But. "])
-    #expect(delivery == .pasted(" But. "))
+    #expect(paste.calls == ["But. "])
+    #expect(delivery == .pasted("But. "))
+    #expect(TakeJoin.needsSeparator(previous: "works. ", next: "But.", field: .unknown) == false)
 }

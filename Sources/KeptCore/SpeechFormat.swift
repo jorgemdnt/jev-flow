@@ -21,16 +21,20 @@ public enum SpeechFormat {
     public static let minimumConfidence = 0.7
 
     /// Code renders. The model only chose the shape and the spans.
-    public static func render(_ transcript: String, shape: SpokenShape, replacements: [Replacement]) -> String {
+    public static func render(_ transcript: String, shape: SpokenShape, replacements: [Replacement], dictionary: [String] = []) -> String {
         let corrected = Formatter.format(transcript)
-        let replaced = apply(replacements, to: corrected)
+        let named = applyDictionary(dictionary, to: corrected)
+        let replaced = apply(replacements, to: named)
+        if let listed = spokenList(replaced) {
+            return listed
+        }
         switch shape {
         case .prose, .numbered:
             return Formatter.finished(replaced)
         case .list:
             let items = listItems(in: replaced)
-            guard items.count >= 2 else { return Formatter.finished(replaced) }
-            return items.map { "• \(capitalizeItem($0))" }.joined(separator: "\n")
+            guard items.count >= 2, !isCountSplit(items) else { return Formatter.finished(replaced) }
+            return bullets(items)
         }
     }
 
@@ -69,6 +73,71 @@ public enum SpeechFormat {
         return result
     }
 
+    /// A dictionary word replaces a span with the same letters. An @handle also
+    /// replaces its unique first name or surname. Pedro and Gabriel need the surname.
+    static func applyDictionary(_ entries: [String], to text: String) -> String {
+        let tokens = words(in: text)
+        guard !tokens.isEmpty else { return text }
+        var planned: [(String, String)] = []
+        let handles = entries.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { $0.hasPrefix("@") }
+        var owners: [String: [String]] = [:]
+        for handle in handles {
+            let parts = handle.dropFirst().split(separator: ".").map { letters(String($0)) }.filter { !$0.isEmpty }
+            for part in parts {
+                owners[part, default: []].append(handle)
+            }
+            if let span = matchingSpan(in: tokens, letters: letters(handle)) {
+                planned.append((span, handle))
+            }
+        }
+        for (part, handles) in owners where handles.count == 1 {
+            if let span = matchingSpan(in: tokens, letters: part, maxTokens: 1) {
+                planned.append((span, handles[0]))
+            }
+        }
+        for entry in entries where !entry.hasPrefix("@") {
+            let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = letters(trimmed)
+            if let span = matchingSpan(in: tokens, letters: key) {
+                planned.append((span, trimmed))
+            }
+            for alias in spokenAliases[key] ?? [] {
+                guard let span = matchingSpan(in: tokens, letters: letters(alias), maxTokens: 2) else { continue }
+                planned.append((span, trimmed))
+            }
+        }
+        var result = text
+        for (span, word) in planned.sorted(by: { $0.0.count > $1.0.count }) {
+            var next = result
+            var guardCount = 0
+            while guardCount < 6 {
+                let replaced = replaceSpan(span, with: word, in: next)
+                if replaced == next { break }
+                next = replaced
+                guardCount += 1
+            }
+            result = next
+        }
+        return result.replacingOccurrences(of: "(?i)\\bat\\s+@", with: "@", options: .regularExpression)
+    }
+
+    private static let spokenAliases: [String: [String]] = [
+        "artie": ["rt", "arty", "r t"],
+    ]
+
+    private static func matchingSpan(in tokens: [String], letters key: String, maxTokens: Int = 4) -> String? {
+        guard !key.isEmpty else { return nil }
+        let limit = min(maxTokens, tokens.count)
+        guard limit > 0 else { return nil }
+        for size in stride(from: limit, through: 1, by: -1) {
+            for index in 0...(tokens.count - size) {
+                let span = tokens[index..<(index + size)].joined(separator: " ")
+                if letters(span) == key { return span }
+            }
+        }
+        return nil
+    }
+
     static func listItems(in text: String) -> [String] {
         let normalized = text.replacingOccurrences(of: ", and ", with: " and ")
         return normalized
@@ -76,6 +145,61 @@ public enum SpeechFormat {
             .flatMap { $0.components(separatedBy: ", ") }
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    /// "list of banana pineapple" is the list. Commas in "1, 2, 3" are a count, not items.
+    static func spokenList(_ text: String) -> String? {
+        guard let cue = lastCue(in: text) else { return nil }
+        let preface = String(text[..<cue.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let tail = String(text[cue.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let items = tailItems(in: tail)
+        guard items.count >= 2 else { return nil }
+        let bullets = bullets(items)
+        guard !preface.isEmpty else { return bullets }
+        return Formatter.streaming(preface) + "\n" + bullets
+    }
+
+    static func isCountSplit(_ items: [String]) -> Bool {
+        items.contains { isCountToken($0) }
+    }
+
+    private static func bullets(_ items: [String]) -> String {
+        items.map { "• \(capitalizeItem($0))" }.joined(separator: "\n")
+    }
+
+    private static func tailItems(in tail: String) -> [String] {
+        let trimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let separated = listItems(in: trimmed).map(cleanItem).filter { !$0.isEmpty }
+        if separated.count >= 2, !separated.allSatisfy(isCountToken) { return separated }
+        let words = trimmed.split(whereSeparator: \.isWhitespace).map { cleanItem(String($0)) }.filter { !$0.isEmpty }
+        guard words.count >= 2, !words.allSatisfy(isCountToken) else { return [] }
+        return words
+    }
+
+    private static func lastCue(in text: String) -> Range<String.Index>? {
+        var found: Range<String.Index>?
+        var search = text.startIndex
+        while let range = text.range(
+            of: #"(?i)(?<![A-Za-z])list of(?![A-Za-z])"#,
+            options: .regularExpression,
+            range: search..<text.endIndex
+        ) {
+            found = range
+            search = range.upperBound
+        }
+        return found
+    }
+
+    private static func cleanItem(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private static func isCountToken(_ text: String) -> Bool {
+        let bare = cleanItem(text).lowercased()
+        if bare.isEmpty { return false }
+        if Int(bare) != nil { return true }
+        return ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"].contains(bare)
     }
 
     private static func capitalizeItem(_ text: String) -> String {
@@ -90,7 +214,9 @@ public enum SpeechFormat {
     }
 
     private static func letters(_ text: String) -> String {
-        text.lowercased().filter(\.isLetter)
+        text.folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+            .lowercased()
+            .filter(\.isLetter)
     }
 
     private static func resembles(_ span: String, _ entry: String) -> Bool {

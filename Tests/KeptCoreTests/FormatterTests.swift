@@ -1,6 +1,27 @@
 import Testing
 @testable import KeptCore
 
+@Test func aSpokenPullRequestNumberBecomesDigits() {
+    let text = Formatter.finished("Okay, let's ship we are five thousand forty-nine right now.")
+    #expect(text == "Okay, let's ship PR 5049 right now.")
+    #expect(Formatter.format("let's shoot we are five thousand forty-nine") == "let's ship PR 5049")
+}
+
+@Test func aCountStaysWordsAndASmallNumberStaysAWord() {
+    #expect(Formatter.format("one two three") == "one two three")
+    #expect(Formatter.format("we are five minutes late") == "we are five minutes late")
+    #expect(Formatter.format("shoot the video") == "shoot the video")
+    #expect(Formatter.format("a list of banana") == "a list of banana")
+}
+
+@Test func aStandaloneUhIsDropped() {
+    #expect(Formatter.format("list of uh banana") == "list of banana")
+    #expect(Formatter.format("I uh said umbrella") == "I said umbrella")
+    #expect(Formatter.format("uh, banana") == "banana")
+    #expect(Formatter.format("um banana") == "um banana")
+    #expect(Formatter.format("nao vem amanha, sloness") == "não vem amanhã, slowness")
+}
+
 @Test func formatterAcceptsATranscript() {
     let formatted = Formatter.format("")
     #expect(formatted.isEmpty)

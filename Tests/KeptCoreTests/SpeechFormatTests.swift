@@ -2,6 +2,61 @@ import Foundation
 import Testing
 @testable import KeptCore
 
+@Test func aListCueDoesNotBulletTheCountBeforeIt() {
+    let heard = "Alright so testing 1, 2, 3 Let's make a list of uh banana pineapple"
+    let text = SpeechFormat.render(heard, shape: .list, replacements: [])
+    #expect(text == """
+    Alright so testing 1, 2, 3 Let's make a list of
+    • Banana
+    • Pineapple
+    """)
+    #expect(!text.contains("uh"))
+    #expect(!text.contains("• 2"))
+    #expect(text.contains("Alright"))
+}
+
+@Test func theSameListIsFormattedWithoutJev() {
+    let text = SpeechFormat.render(
+        "Okay so testing one two three let's make a list of uh banana pineapple",
+        shape: .prose,
+        replacements: []
+    )
+    #expect(text.contains("Okay"))
+    #expect(text.contains("one two three"))
+    #expect(text.contains("• Banana"))
+    #expect(text.contains("• Pineapple"))
+    #expect(!text.contains("uh"))
+}
+
+@Test func aCountIsNotAList() {
+    let text = SpeechFormat.render("Alright so testing 1, 2, 3 please", shape: .list, replacements: [])
+    #expect(!text.contains("•"))
+    #expect(text.contains("1, 2, 3"))
+}
+
+@Test func aUniqueNamePastesTheHandle() {
+    let people = ["@felipe.menezes", "@pedro.vivaldi", "@pedro.muller", "@gabriel.costa", "@gabriel.leal"]
+    let text = SpeechFormat.render("ask Felipe and at Pedro Vivaldi and Pedro and Müller", shape: .prose, replacements: [], dictionary: people)
+    #expect(text.contains("@felipe.menezes"))
+    #expect(text.contains("@pedro.vivaldi"))
+    #expect(text.contains("@pedro.muller"))
+    #expect(!text.contains("@pedro "))
+    #expect(text.contains("Pedro"))
+}
+
+@Test func rtIsArtieWhenArtieIsInTheDictionary() {
+    let text = SpeechFormat.render("We need to ship RT.", shape: .prose, replacements: [], dictionary: ["Artie"])
+    #expect(text == "We need to ship Artie.")
+    #expect(!text.hasPrefix(" "))
+    #expect(text.hasSuffix("."))
+}
+
+@Test func aProductTermKeepsItsSpelling() {
+    let text = SpeechFormat.render("ship the post hog change and the code rabbit review", shape: .prose, replacements: [], dictionary: ["PostHog", "CodeRabbit"])
+    #expect(text.contains("PostHog"))
+    #expect(text.contains("CodeRabbit"))
+}
+
 @Test func listShapeKeepsEveryWord() {
     let text = SpeechFormat.render(
         "buy milk and eggs and I would never not want bread",

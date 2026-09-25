@@ -2,8 +2,40 @@ public enum Formatter {
     /// `err` / `er` as its own token replaces the previous word. `or`, and
     /// those letters inside another word, are left alone.
     public static func format(_ raw: String) -> String {
+        let spoken = dropFillers(raw)
         let correction = /(?i)[A-Za-z0-9']+(?:[ \t]*,[ \t]*|[ \t]+)(?:err|er)(?![A-Za-z])(?:[ \t]*,[ \t]*|[ \t]+)/
-        return raw.replacing(correction, with: "")
+        return correctSpellings(SpokenNumber.apply(spoken.replacing(correction, with: "")))
+    }
+
+    /// A standalone `uh` is a hesitation, not a word. `um` stays: in Portuguese it is "a" or "one".
+    static func dropFillers(_ raw: String) -> String {
+        raw.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            line.split(whereSeparator: \.isWhitespace).map(String.init).filter { !isFiller($0) }.joined(separator: " ")
+        }.joined(separator: "\n")
+    }
+
+    private static func isFiller(_ token: String) -> Bool {
+        let bare = token.trimmingCharacters(in: .punctuationCharacters).lowercased()
+        return bare.wholeMatch(of: /uh+/) != nil
+    }
+
+    static func correctSpellings(_ raw: String) -> String {
+        let fixes = [
+            "nao": "não", "voce": "você", "tambem": "também", "entao": "então",
+            "amanha": "amanhã", "manha": "manhã", "documentacao": "documentação",
+            "sloness": "slowness", "successfuly": "successfully", "imediatelly": "immediately",
+            "inneficiencies": "inefficiencies", "inneficiency": "inefficiency", "meawhile": "meanwhile",
+            "th": "the",
+        ]
+        return raw.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            line.split(whereSeparator: \.isWhitespace).map { token in
+                let word = String(token)
+                let bare = word.trimmingCharacters(in: .punctuationCharacters)
+                guard let fixed = fixes[bare.lowercased()] else { return word }
+                let replaced = bare.first?.isUppercase == true ? fixed.prefix(1).uppercased() + fixed.dropFirst() : fixed
+                return word.replacingOccurrences(of: bare, with: replaced)
+            }.joined(separator: " ")
+        }.joined(separator: "\n")
     }
 
     /// In-progress text. Capitalize the start. Do not add a period yet.
@@ -48,33 +80,24 @@ public enum FieldJoin: Equatable, Sendable {
 }
 
 public enum TakeJoin {
-    /// A new take inserts one space unless the field already ends in whitespace.
-    /// When the field cannot be read, a later take is still separated: the
-    /// previous paste's trailing space is not proof the field kept it.
+    /// The paste never starts with a space. It ends with one. A missing gap
+    /// before the caret is typed, not pasted. An unread field does not get a
+    /// leading space.
     public static func text(previous: String, next: String, field: FieldJoin = .unknown) -> String {
         guard !next.isEmpty else { return "" }
-        guard needsSeparator(previous: previous, next: next, field: field) else { return next }
-        return " " + next
+        return next
     }
 
     public static func needsSeparator(previous: String, next: String, field: FieldJoin = .unknown) -> Bool {
         guard let first = next.first, !first.isWhitespace else { return false }
-        switch field {
-        case .separated:
-            return false
-        case .needsSpace:
-            return true
-        case .unknown:
-            return !previous.isEmpty
-        }
+        return field == .needsSpace
     }
 
-    /// The text that is pasted. Always ends with one space, so the next
-    /// submission does not depend on the following take remembering to join.
+    /// The text that is pasted. Ends with one space. Does not start with one.
     public static func submission(previous: String, next: String, field: FieldJoin = .unknown) -> String {
-        let joined = text(previous: previous, next: next, field: field)
-        guard !joined.isEmpty else { return "" }
-        if joined.last?.isWhitespace == true { return joined }
-        return joined + " "
+        let body = next.drop(while: \.isWhitespace)
+        guard !body.isEmpty else { return "" }
+        if body.last?.isWhitespace == true { return String(body) }
+        return body + " "
     }
 }
