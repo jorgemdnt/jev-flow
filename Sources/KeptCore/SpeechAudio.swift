@@ -113,3 +113,44 @@ public enum HoldKey {
         return (flags & optionBit) != 0
     }
 }
+
+/// A hold that cannot hear the key-up still has to end. A route change is not
+/// a take. A tap that stops delivering is not a hold.
+public enum HoldWatch {
+    public static let deadTap: Duration = .milliseconds(1500)
+
+    public static func shouldAbandon(holding: Bool, routeChanged: Bool) -> Bool {
+        holding && routeChanged
+    }
+
+    public static func tapDied(bytes: Int, previousBytes: Int, quietFor: Duration) -> Bool {
+        bytes == previousBytes && quietFor >= deadTap
+    }
+
+    /// A hold with no words and no signal cannot stay up. Speech in the
+    /// buffer is not this case.
+    public static let noAudio: Duration = .seconds(3)
+    public static let noWords: Duration = .seconds(8)
+
+    public static func noAudio(previewEmpty: Bool, silent: Bool, quietFor: Duration) -> Bool {
+        previewEmpty && silent && quietFor >= noAudio
+    }
+
+    public static func noWords(previewEmpty: Bool, quietFor: Duration) -> Bool {
+        previewEmpty && quietFor >= noWords
+    }
+
+    /// Speech is never dropped because the hold ran long. Silence after they
+    /// stop talking ends the take so it can be inserted.
+    public static let silenceBeforeInsert: Duration = .seconds(45)
+
+    public static func insertAfterSilence(silentFor: Duration) -> Bool {
+        silentFor >= silenceBeforeInsert
+    }
+
+    public static let escapeKey: UInt16 = 53
+
+    public static func escapeCancels(holding: Bool, keyCode: UInt16, keyDown: Bool) -> Bool {
+        holding && keyDown && keyCode == escapeKey
+    }
+}

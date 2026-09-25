@@ -50,7 +50,10 @@ enum InputDevices {
     @discardableResult
     static func apply(uid: String, to engine: AVAudioEngine) -> String {
         let chosen = resolve(uid: uid)
-        guard let chosen, let audioUnit = engine.inputNode.audioUnit else {
+        // The engine already follows the system input. Forcing that device
+        // disconnects the aggregate and opens the speaker path first. That
+        // is the mic light bursting, and the next hold then fails to start.
+        guard !uid.isEmpty, let chosen, let audioUnit = engine.inputNode.audioUnit else {
             return chosen?.name ?? "System microphone"
         }
         var deviceID = chosen.deviceID
@@ -66,6 +69,14 @@ enum InputDevices {
             return fallback.name
         }
         return chosen.name
+    }
+
+    static func startWatching(_ onChange: @escaping @Sendable () -> Void) {
+        InputRoute.start(onChange)
+    }
+
+    static func consumeRouteChange() -> Bool {
+        InputRoute.consume()
     }
 
     private static func deviceIDs() -> [AudioDeviceID] {
@@ -122,6 +133,63 @@ enum InputDevices {
     }
 }
 
+private final class InputRouteState: @unchecked Sendable {
+    let lock = NSLock()
+    var started = false
+    var changed = false
+    var onChange: @Sendable () -> Void = {}
+}
+
+private let inputRoute = InputRouteState()
+
+private enum InputRoute {
+    static func start(_ onChange: @escaping @Sendable () -> Void) {
+        inputRoute.lock.lock()
+        inputRoute.onChange = onChange
+        let needsInstall = !inputRoute.started
+        inputRoute.started = true
+        inputRoute.lock.unlock()
+        guard needsInstall else { return }
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var defaultInput = address(kAudioHardwarePropertyDefaultInputDevice)
+        AudioObjectAddPropertyListener(system, &defaultInput, routeChanged, nil)
+    }
+
+    static func markChanged() {
+        inputRoute.lock.lock()
+        inputRoute.changed = true
+        let notify = inputRoute.onChange
+        inputRoute.lock.unlock()
+        notify()
+    }
+
+    static func consume() -> Bool {
+        inputRoute.lock.lock()
+        defer { inputRoute.lock.unlock() }
+        let value = inputRoute.changed
+        inputRoute.changed = false
+        return value
+    }
+
+    private static func address(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+}
+
+private func routeChanged(
+    _ objectID: AudioObjectID,
+    _ addressCount: UInt32,
+    _ addresses: UnsafePointer<AudioObjectPropertyAddress>,
+    _ client: UnsafeMutableRawPointer?
+) -> OSStatus {
+    InputRoute.markChanged()
+    return noErr
+}
+
 private let microphoneFile = KeptPaths.applicationSupport.appendingPathComponent("microphone.txt")
 
 @MainActor
@@ -151,6 +219,7 @@ final class MicStore {
             withIntermediateDirectories: true
         )
         try? uid.write(to: microphoneFile, atomically: true, encoding: .utf8)
+        InputRoute.markChanged()
     }
 
     nonisolated static func savedUID() -> String {

@@ -7,6 +7,9 @@ import KeptCore
 enum LivePhase: Equatable {
     case idle
     case listening
+    case locked
+    case editing
+    case notice
     case transcribing
     case cleaning
 }
@@ -20,6 +23,8 @@ final class Session {
     var lastInsertedText = ""
     var livePhase: LivePhase = .idle
     var livePreview = ""
+    var liveCommitted = ""
+    var liveTail = ""
     var microphoneName = ""
     let voice = VoiceStore()
 
@@ -39,8 +44,22 @@ final class Session {
     @ObservationIgnored private var activeID: UUID?
     @ObservationIgnored private var partialTask: Task<Void, Never>?
     @ObservationIgnored private var finishTask: Task<Void, Never>?
+    @ObservationIgnored private var watchTask: Task<Void, Never>?
+    @ObservationIgnored private var holdGeneration = 0
     @ObservationIgnored private var previousFinish: Task<Void, Never>?
+    @ObservationIgnored private var gestures = CaptureGestures()
+    @ObservationIgnored private var armTask: Task<Void, Never>?
+    @ObservationIgnored private var noticeTask: Task<Void, Never>?
+    @ObservationIgnored private var editing = false
+    @ObservationIgnored private var locked = false
+    @ObservationIgnored private var editSelection = ""
+    @ObservationIgnored private var lastInsertLocation: Int?
+    @ObservationIgnored private var lastInsertLength = 0
     var caretNote = ""
+    var editSubject = ""
+    var editKind = ""
+    var noticeTitle = ""
+    var noticeBody = ""
 
     init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory)) {
         self.store = store
@@ -48,14 +67,26 @@ final class Session {
         lastInsertedText = Self.readLastInserted() ?? takes.compactMap(\.insertedText).first ?? ""
         try? FileManager.default.createDirectory(at: KeptPaths.takesDirectory, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: KeptPaths.modelsDirectory, withIntermediateDirectories: true)
-        monitor.onDown = { [weak self] in
-            Task { @MainActor in self?.beginHold() }
+        monitor.onDown = { [weak self] commandDown in
+            let at = Session.milliseconds()
+            Task { @MainActor in self?.optionDown(commandDown, at: at) }
         }
         monitor.onUp = { [weak self] in
-            Task { @MainActor in self?.endHold() }
+            let at = Session.milliseconds()
+            Task { @MainActor in self?.optionUp(at: at) }
+        }
+        monitor.onCancel = { [weak self] in
+            Task { @MainActor in self?.cancelHold() }
         }
         monitor.start()
+        InputDevices.startWatching { [weak self] in
+            Task { @MainActor in
+                MicStore.shared.refresh()
+                self?.noteRouteChange()
+            }
+        }
         Task { await ParakeetEngine.shared.warmup() }
+        mic.warm()
         caret.onNote = { [weak self] note in
             self?.caretNote = note
         }
@@ -64,16 +95,142 @@ final class Session {
         }
     }
 
+    private static func milliseconds() -> Int {
+        Int(Date().timeIntervalSince1970 * 1000)
+    }
+
+    private func optionDown(_ commandDown: Bool, at ms: Int) {
+        armTask?.cancel()
+        let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let effect = gestures.optionDown(at: ms, commandDown: commandDown, selection: selected)
+        apply(effect)
+    }
+
+    private func optionUp(at ms: Int) {
+        let effect = gestures.optionUp(at: ms)
+        apply(effect)
+        if case .armed = gestures.mode {
+            let upAt = ms
+            armTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(CaptureGestures.gap))
+                await MainActor.run {
+                    guard let self else { return }
+                    self.apply(self.gestures.tick(at: upAt + CaptureGestures.gap))
+                }
+            }
+        }
+    }
+
+    private func apply(_ effect: CaptureGestures.Effect) {
+        switch effect {
+        case .none:
+            break
+        case .startHold:
+            editing = false
+            locked = false
+            beginHold()
+        case .startHoldAfterTap:
+            dismissTap()
+            editing = false
+            locked = false
+            beginHold()
+        case .startLock:
+            locked = true
+            livePhase = .locked
+            status = "Tap Right Option to stop"
+        case .startEdit:
+            guard OpenCodeKey.load() != nil else {
+                gestures = CaptureGestures()
+                showNotice("No OpenCode key", "Save one in Settings.")
+                return
+            }
+            guard let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty else {
+                gestures = CaptureGestures()
+                showNotice("Select text", "Select the text you want to change first.")
+                return
+            }
+            editSelection = selected
+            editSubject = selected
+            editKind = "Selection"
+            editing = true
+            locked = false
+            beginHold()
+            livePhase = .editing
+        case .finish:
+            locked = false
+            endHold()
+        case .dismissTap:
+            dismissTap()
+        case .finishEdit:
+            editing = false
+            locked = false
+            endEdit()
+        }
+    }
+
+    private func dismissTap() {
+        armTask?.cancel()
+        holdGeneration += 1
+        watchTask?.cancel()
+        watchTask = nil
+        held = false
+        partialTask?.cancel()
+        partialTask = nil
+        _ = mic.stop()
+        if let wav = activeWav {
+            try? FileManager.default.removeItem(at: wav)
+        }
+        activeWav = nil
+        activeID = nil
+        recording = false
+        arming = false
+        locked = false
+        editing = false
+        clearListening()
+    }
+
+    private func showNotice(_ title: String, _ body: String) {
+        busy = false
+        recording = false
+        held = false
+        livePhase = .notice
+        noticeTitle = title
+        noticeBody = body
+        liveCommitted = ""
+        liveTail = ""
+        livePreview = ""
+        status = title
+        noticeTask?.cancel()
+        noticeTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard let self, self.livePhase == .notice else { return }
+            self.clearListening()
+            self.status = self.idleStatus()
+        }
+    }
+
     func beginHold() {
         held = true
         guard !recording else { return }
-        livePhase = .listening
-        livePreview = ""
-        status = "Recording…"
-        Task { await startRecordingIfStillHeld() }
+        holdGeneration += 1
+        let generation = holdGeneration
+        _ = InputDevices.consumeRouteChange()
+        livePhase = editing ? .editing : .listening
+        clearLiveText()
+        status = editing ? "Say the change" : "Recording…"
+        watchTask?.cancel()
+        watchTask = Task { await self.watchHold(generation) }
+        Task { await startRecordingIfStillHeld(generation) }
     }
 
     func endHold() {
+        if editing {
+            editing = false
+            endEdit()
+            return
+        }
+        watchTask?.cancel()
+        watchTask = nil
         held = false
         Task { await ParakeetEngine.shared.endLive() }
         guard recording, let wav = activeWav, let id = activeID else {
@@ -99,6 +256,79 @@ final class Session {
             await streaming?.value
             await prior?.value
             await self.finish(id: id, wav: wav, duration: duration, anchor: self.lastInsertedText)
+        }
+    }
+
+    private func endEdit() {
+        watchTask?.cancel()
+        watchTask = nil
+        held = false
+        let selected = editSelection
+        guard recording, let wav = activeWav, !selected.isEmpty else {
+            showNotice("No instruction", "Say what to change, then release.")
+            return
+        }
+        let duration = mic.stop()
+        recording = false
+        activeWav = nil
+        activeID = nil
+        partialTask?.cancel()
+        partialTask = nil
+        guard SpeechAudio.accepts(durationSeconds: duration) else {
+            try? FileManager.default.removeItem(at: wav)
+            showNotice("No instruction", "Say what to change, then release.")
+            return
+        }
+        busy = true
+        status = "Editing…"
+        livePhase = .transcribing
+        finishTask = Task {
+            let instruction: String
+            do {
+                instruction = try await self.transcribe(wav)
+            } catch {
+                try? FileManager.default.removeItem(at: wav)
+                self.showNotice("Didn't catch that", "Try the change again.")
+                return
+            }
+            try? FileManager.default.removeItem(at: wav)
+            guard let edited = await OpenCodeClient.edit(text: selected, instruction: instruction), !edited.isEmpty else {
+                self.showNotice(
+                    OpenCodeKey.load() == nil ? "No OpenCode key" : "Edit failed",
+                    OpenCodeKey.load() == nil ? "Save one in Settings." : "The model did not return a change."
+                )
+                return
+            }
+            await self.replaceEdited(edited, previous: selected)
+        }
+    }
+
+    private func replaceEdited(_ edited: String, previous: String) async {
+        let replacement = edited.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !replacement.isEmpty else {
+            showNotice("Edit failed", "The model did not return a change.")
+            return
+        }
+        await FocusedAppPaste.focusForeignAppIfNeeded()
+        let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard selected == previous else {
+            showNotice("Selection changed", "Select that text again.")
+            return
+        }
+        switch FocusedAppPaste.paste(replacement) {
+        case .pasted:
+            lastInsertedText = replacement
+            lastInsertLocation = nil
+            lastInsertLength = 0
+            let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
+            try? replacement.write(to: url, atomically: true, encoding: .utf8)
+            busy = false
+            clearListening()
+            status = idleStatus()
+        case .accessibilityMissing:
+            showNotice("Can't insert", Self.insertNeedsAccessibility)
+        case .failed:
+            showNotice("Didn't paste", "The edit was not inserted.")
         }
     }
 
@@ -141,9 +371,101 @@ final class Session {
         Task { await insertStored(id: id) }
     }
 
-    private func startRecordingIfStillHeld() async {
-        guard held, !recording, !arming else {
-            if !held { clearListening() }
+    func cancelHold() {
+        if livePhase == .notice {
+            noticeTask?.cancel()
+            clearListening()
+            status = idleStatus()
+            return
+        }
+        guard held || recording || arming || livePhase == .listening || livePhase == .locked || livePhase == .editing else { return }
+        abandon("Hold cancelled.")
+    }
+
+    private func noteRouteChange() {
+        guard HoldWatch.shouldAbandon(holding: held || recording || arming || livePhase == .listening || livePhase == .locked || livePhase == .editing, routeChanged: true) else {
+            return
+        }
+        abandon("Microphone changed. Hold again.")
+    }
+
+    private func abandon(_ message: String) {
+        gestures = CaptureGestures()
+        locked = false
+        editing = false
+        armTask?.cancel()
+        holdGeneration += 1
+        watchTask?.cancel()
+        watchTask = nil
+        held = false
+        monitor.forceUp()
+        Task { await ParakeetEngine.shared.endLive() }
+        partialTask?.cancel()
+        partialTask = nil
+        _ = mic.stop()
+        if let wav = activeWav {
+            try? FileManager.default.removeItem(at: wav)
+        }
+        activeWav = nil
+        activeID = nil
+        recording = false
+        arming = false
+        clearListening()
+        status = message
+    }
+
+    private func watchHold(_ generation: Int) async {
+        var lastBytes = 0
+        var quietSince = ContinuousClock.now
+        var silentSince = ContinuousClock.now
+        var sawRecording = false
+        while !Task.isCancelled, generation == holdGeneration {
+            try? await Task.sleep(for: .milliseconds(300))
+            guard generation == holdGeneration else { return }
+            let now = ContinuousClock.now
+            if InputDevices.consumeRouteChange() {
+                abandon("Microphone changed. Hold again.")
+                return
+            }
+            guard recording else { continue }
+            if !sawRecording {
+                sawRecording = true
+                lastBytes = mic.byteCount()
+                quietSince = now
+                silentSince = now
+                continue
+            }
+            let bytes = mic.byteCount()
+            if bytes != lastBytes {
+                lastBytes = bytes
+                quietSince = now
+            } else if HoldWatch.tapDied(bytes: bytes, previousBytes: lastBytes, quietFor: now - quietSince) {
+                if bytes > 0 {
+                    finishFromSilence()
+                } else {
+                    abandon("Microphone stopped.")
+                }
+                return
+            }
+            if !mic.recentlySilent() {
+                silentSince = now
+            }
+            if HoldWatch.insertAfterSilence(silentFor: now - silentSince) {
+                finishFromSilence()
+                return
+            }
+        }
+    }
+
+    /// Silence ends the take and inserts it. It does not throw the audio away.
+    private func finishFromSilence() {
+        gestures.endedWithoutKey()
+        endHold()
+    }
+
+    private func startRecordingIfStillHeld(_ generation: Int) async {
+        guard held, generation == holdGeneration, !recording, !arming else {
+            if generation == holdGeneration, !held { clearListening() }
             return
         }
         arming = true
@@ -153,27 +475,31 @@ final class Session {
             clearListening()
             return
         }
-        guard held, !recording else {
-            if !held { clearListening() }
+        guard held, generation == holdGeneration, !recording else {
+            if generation == holdGeneration, !held { clearListening() }
             return
         }
         let id = UUID()
         let wav = store.wavURL(id: id)
         do {
             try mic.start(url: wav)
+            _ = InputDevices.consumeRouteChange()
             microphoneName = mic.deviceName
-            guard held else {
+            await Task.yield()
+            guard held, generation == holdGeneration else {
                 _ = mic.stop()
                 try? FileManager.default.removeItem(at: wav)
                 clearListening()
                 return
             }
         } catch {
-            status = "Could not start the microphone"
-            livePhase = .idle
+            if generation == holdGeneration {
+                status = "Could not start the microphone"
+                clearListening()
+            }
             return
         }
-        guard held else {
+        guard held, generation == holdGeneration else {
             _ = mic.stop()
             try? FileManager.default.removeItem(at: wav)
             clearListening()
@@ -182,9 +508,15 @@ final class Session {
         activeID = id
         activeWav = wav
         recording = true
-        livePhase = .listening
-        livePreview = ""
-        status = "Recording…"
+        if locked {
+            livePhase = .locked
+        } else if editing {
+            livePhase = .editing
+        } else {
+            livePhase = .listening
+        }
+        clearLiveText()
+        status = locked ? "Tap Right Option to stop" : (editing ? "Say the change" : "Recording…")
         caret.show()
         previousFinish = finishTask
         partialTask = Task {
@@ -192,46 +524,10 @@ final class Session {
         }
     }
 
-    /// v3 sliding windows while the key is down. The card updates as each
-    /// window finishes. Partials are not pasted. Release runs one v3 batch.
+    /// The card reads the audio so far. The sliding window does not gate it:
+    /// that window was leaving the card on … while the hold stayed up.
     private func streamPartials(id: UUID) async {
-        let code = LanguageStore.currentCode()
-        guard SpeechRoute.engine(for: code) == .parakeetV3 else {
-            await streamBatchPartials(id: id)
-            return
-        }
-        let updates: AsyncStream<String>
-        do {
-            updates = try await ParakeetEngine.shared.beginLive(languageCode: code)
-        } catch {
-            guard recording, activeID == id, !Task.isCancelled else { return }
-            await streamBatchPartials(id: id)
-            return
-        }
-        let feed = Task { [weak self] in
-            var fed = 0
-            while !Task.isCancelled {
-                guard let self else { return }
-                let pcm = self.mic.copyPCM()
-                let samples = WavPCM.floatSamples(pcm)
-                if samples.count > fed {
-                    let delta = Array(samples[fed..<samples.count])
-                    fed = samples.count
-                    await ParakeetEngine.shared.pushLive(delta)
-                }
-                try? await Task.sleep(for: .milliseconds(40))
-            }
-        }
-        defer { feed.cancel() }
-        for await raw in updates {
-            guard recording, activeID == id, !Task.isCancelled else { break }
-            let text = Formatter.streaming(raw)
-            if !text.isEmpty {
-                livePreview = text
-            }
-        }
-        feed.cancel()
-        await ParakeetEngine.shared.endLive()
+        await streamBatchPartials(id: id)
     }
 
     /// Whisper, and a v3 stream that failed to open. Re-reads the audio so far.
@@ -240,7 +536,7 @@ final class Session {
         while recording, activeID == id, !Task.isCancelled {
             let pcm = mic.copyPCM()
             let floor = SpeechAudio.minimumSamples * 2
-            let needed = sent == 0 ? floor : sent + 12_800
+            let needed = sent == 0 ? floor : sent + 8_000
             guard pcm.count >= needed else {
                 try? await Task.sleep(for: .milliseconds(40))
                 continue
@@ -249,10 +545,7 @@ final class Session {
             do {
                 let raw = try await transcribePCM(snapshot, sampleRate: SpeechAudio.sampleRate)
                 guard recording, activeID == id, !Task.isCancelled else { return }
-                let text = Formatter.streaming(raw)
-                if !text.isEmpty {
-                    livePreview = text
-                }
+                showLive(LivePhrases().replacing(raw))
                 sent = snapshot.count
                 await Task.yield()
             } catch {
@@ -268,10 +561,13 @@ final class Session {
             if !recording {
                 caret.hide()
                 livePhase = .idle
-                livePreview = ""
+                clearLiveText()
             }
             if held && monitor.isDown {
-                Task { await startRecordingIfStillHeld() }
+                holdGeneration += 1
+                let generation = holdGeneration
+                watchTask = Task { await self.watchHold(generation) }
+                Task { await startRecordingIfStillHeld(generation) }
             } else if !monitor.isDown {
                 held = false
             }
@@ -380,13 +676,33 @@ final class Session {
     }
 
     private func place(_ text: String, typeSeparator: Bool = false) -> PlaceResult {
+        let body = Self.pasteBody(text)
         switch FocusedField.caretForInsert() {
         case .selectionCouldNotCollapse:
             return .wouldReplaceSelection
-        case .location, .unavailable:
+        case .location(let at):
+            let start = typeSeparator ? at + 1 : at
             if typeSeparator { _ = FocusedAppPaste.typeSpace() }
-            switch FocusedAppPaste.paste(text) {
+            switch FocusedAppPaste.paste(body) {
             case .pasted:
+                Self.scheduleTrailingSpace(for: text)
+                lastInsertLocation = start
+                lastInsertLength = text.count
+                return .placed(text)
+            case .accessibilityMissing:
+                return .accessibilityMissing
+            case .failed:
+                return .failed
+            }
+        case .unavailable:
+            if let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty {
+                return .wouldReplaceSelection
+            }
+            if typeSeparator { _ = FocusedAppPaste.typeSpace() }
+            switch FocusedAppPaste.paste(body) {
+            case .pasted:
+                Self.scheduleTrailingSpace(for: text)
+                lastInsertLocation = nil
                 return .placed(text)
             case .accessibilityMissing:
                 return .accessibilityMissing
@@ -396,11 +712,43 @@ final class Session {
         }
     }
 
+    /// The field trims a trailing space out of a paste. Type it after the paste lands.
+    private static func pasteBody(_ text: String) -> String {
+        text.hasSuffix(" ") ? String(text.dropLast()) : text
+    }
+
+    private static func scheduleTrailingSpace(for text: String) {
+        guard text.hasSuffix(" ") else { return }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(220))
+            _ = FocusedAppPaste.typeSpace()
+        }
+    }
+
+    private func showLive(_ phrases: LivePhrases) {
+        let formatted = Formatter.streaming(phrases.shown)
+        guard !formatted.isEmpty else { return }
+        let split = phrases.split(formatted: formatted)
+        liveCommitted = split.committed
+        liveTail = split.tail
+        livePreview = [split.committed, split.tail].filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
+    private func clearLiveText() {
+        livePreview = ""
+        liveCommitted = ""
+        liveTail = ""
+    }
+
     private func clearListening() {
         guard !recording else { return }
         caret.hide()
         livePhase = .idle
-        livePreview = ""
+        noticeTitle = ""
+        noticeBody = ""
+        editSubject = ""
+        editKind = ""
+        clearLiveText()
         if status == "Recording…" { status = idleStatus() }
     }
 
@@ -409,7 +757,7 @@ final class Session {
         if !recording {
             caret.hide()
             livePhase = .idle
-            livePreview = ""
+            clearLiveText()
         }
         busy = false
         if !recording { status = idleStatus() }
@@ -534,8 +882,9 @@ private actor WhisperSerial {
 final class RightOptionMonitor {
     static let keyCode: UInt16 = 0x3D
 
-    var onDown: () -> Void = {}
+    var onDown: (Bool) -> Void = { _ in }
     var onUp: () -> Void = {}
+    var onCancel: () -> Void = {}
     private(set) var globalInstalled = false
     private(set) var isDown = false
     private var global: Any?
@@ -579,15 +928,20 @@ final class RightOptionMonitor {
                 return
             }
             if event.type == .keyDown {
-                begin()
+                begin(commandDown: HoldKeyCommand.rightCommandDown(flags: UInt64(event.modifierFlags.rawValue)))
                 return
             }
+        }
+        if event.type == .keyDown, event.keyCode == HoldWatch.escapeKey {
+            forceUp()
+            onCancel()
+            return
         }
         guard event.type == .flagsChanged else { return }
         let flags = UInt64(event.modifierFlags.rawValue)
         guard let edge = HoldKey.event(wasDown: down, keyCode: event.keyCode, flags: flags) else { return }
         if edge == .down {
-            begin()
+            begin(commandDown: HoldKeyCommand.rightCommandDown(flags: flags))
         } else {
             finish()
         }
@@ -604,11 +958,17 @@ final class RightOptionMonitor {
         }
     }
 
-    private func begin() {
+    private func begin(commandDown: Bool) {
         guard !down else { return }
         down = true
         isDown = true
-        onDown()
+        onDown(commandDown)
+    }
+
+    func forceUp() {
+        down = false
+        isDown = false
+        sawDeviceBit = false
     }
 
     private func finish() {
@@ -624,6 +984,8 @@ final class MicRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var pcm = Data()
     private var engine: AVAudioEngine?
+    private var appliedUID: String?
+    private var tapInstalled = false
     private var destination: URL?
     private(set) var deviceName = ""
 
@@ -644,11 +1006,20 @@ final class MicRecorder: @unchecked Sendable {
         }
     }
 
+    func warm() {
+        _ = try? prepare(uid: MicStore.savedUID())
+        _ = engine?.inputNode
+    }
+
     func start(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let engine = AVAudioEngine()
-        deviceName = InputDevices.apply(uid: MicStore.savedUID(), to: engine)
+        let uid = MicStore.savedUID()
+        let engine = try prepare(uid: uid)
         let input = engine.inputNode
+        if tapInstalled {
+            input.removeTap(onBus: 0)
+            tapInstalled = false
+        }
         let hardware = input.outputFormat(forBus: 0)
         guard hardware.sampleRate > 0, hardware.channelCount > 0 else { throw RecorderError.failed }
         lock.lock()
@@ -658,16 +1029,72 @@ final class MicRecorder: @unchecked Sendable {
         input.installTap(onBus: 0, bufferSize: 4096, format: hardware) { [weak self] buffer, _ in
             self?.append(buffer)
         }
+        tapInstalled = true
         engine.prepare()
-        try engine.start()
+        do {
+            try engine.start()
+        } catch {
+            input.removeTap(onBus: 0)
+            tapInstalled = false
+            engine.stop()
+            self.engine = nil
+            appliedUID = nil
+            throw error
+        }
         self.engine = engine
     }
 
+    /// One engine for every hold. A new engine opens the speaker, then the mic.
+    private func prepare(uid: String) throws -> AVAudioEngine {
+        if let engine, appliedUID == uid {
+            if engine.isRunning { engine.stop() }
+            return engine
+        }
+        if let engine {
+            if tapInstalled {
+                engine.inputNode.removeTap(onBus: 0)
+                tapInstalled = false
+            }
+            engine.stop()
+        }
+        let engine = AVAudioEngine()
+        deviceName = InputDevices.apply(uid: uid, to: engine)
+        appliedUID = uid
+        self.engine = engine
+        return engine
+    }
+
     func stop() -> Double {
-        engine?.inputNode.removeTap(onBus: 0)
+        if tapInstalled {
+            engine?.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
         engine?.stop()
-        engine = nil
         return writeKeptFile()
+    }
+
+    func byteCount() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pcm.count
+    }
+
+    /// True when the latest slice has no speech. A live tap of silence is not a dead tap.
+    func recentlySilent() -> Bool {
+        lock.lock()
+        let data = pcm
+        lock.unlock()
+        guard data.count >= 2 else { return true }
+        let start = data.count - min(data.count, 6_400)
+        let aligned = start - (start % 2)
+        var peak = 0
+        data.withUnsafeBytes { raw in
+            let samples = raw.bindMemory(to: Int16.self)
+            for sample in samples[(aligned / 2)...] {
+                peak = max(peak, abs(Int(sample)))
+            }
+        }
+        return peak < 300
     }
 
     func copyPCM() -> Data {

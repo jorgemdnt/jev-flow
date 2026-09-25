@@ -262,6 +262,9 @@ private struct SettingsPage: View {
                     }
                 }
             }
+            KeptCard {
+                OpenCodeKeyCard()
+            }
         }
         .onAppear { source = TypeSafeKey.source() }
     }
@@ -284,6 +287,51 @@ private struct SettingsPage: View {
     private func remove() {
         TypeSafeKey.delete()
         source = TypeSafeKey.source()
+    }
+}
+
+private struct OpenCodeKeyCard: View {
+    @State private var draft = ""
+    @State private var source = OpenCodeKey.source()
+    @State private var failed = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Edit uses DeepSeek V4.1 Flash. \(source == .saved ? "OpenCode key saved." : "No OpenCode key saved yet.")")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            SecureField("OpenCode API key", text: $draft)
+                .textFieldStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(KeptColor.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            HStack {
+                Button("Save OpenCode key") {
+                    failed = !OpenCodeKey.save(draft)
+                    if !failed {
+                        draft = ""
+                        source = OpenCodeKey.source()
+                    }
+                }
+                .buttonStyle(KeptPrimaryButton())
+                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if source == .saved {
+                    Button("Remove OpenCode key") {
+                        OpenCodeKey.delete()
+                        source = OpenCodeKey.source()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                }
+            }
+            if failed {
+                Text("Could not save the key.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+            }
+        }
+        .onAppear { source = OpenCodeKey.source() }
     }
 }
 

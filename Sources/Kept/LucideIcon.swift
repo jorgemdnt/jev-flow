@@ -5,6 +5,8 @@ enum LucideIcon: String {
     case book
     case settings
     case option
+    case alert
+    case pencil
 
     fileprivate var drawings: [String] {
         switch self {
@@ -23,6 +25,17 @@ enum LucideIcon: String {
             ]
         case .option:
             ["M3 3h6l6 18h6", "M14 3h7"]
+        case .alert:
+            [
+                "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z",
+                "M12 9v4",
+                "M12 17h.01",
+            ]
+        case .pencil:
+            [
+                "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z",
+                "m15 5 4 4",
+            ]
         }
     }
 }

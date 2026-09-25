@@ -44,6 +44,11 @@ enum FocusedField {
         return setSelectedRange(CFRange(location: location, length: length), on: element)
     }
 
+    static func text(location: Int, length: Int) -> String? {
+        guard location >= 0, length > 0, let element = element() else { return nil }
+        return string(CFRange(location: location, length: length), on: element)
+    }
+
     static func selectedText() -> String? {
         guard let element = element() else { return nil }
         var value: CFTypeRef?

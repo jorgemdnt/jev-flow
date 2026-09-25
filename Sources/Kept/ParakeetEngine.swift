@@ -55,7 +55,7 @@ actor ParakeetEngine {
         let (output, continuation) = AsyncStream<String>.makeStream()
         liveTask = Task {
             for await update in updates {
-                let text = await Self.shown(stream, fallback: update.text)
+                let text = Self.windowText(update)
                 if !text.isEmpty { continuation.yield(text) }
             }
             continuation.finish()
@@ -134,11 +134,12 @@ actor ParakeetEngine {
         return try AsrModels.loadLocal(from: directory, version: .v3)
     }
 
-    private static func shown(_ stream: SlidingWindowAsrManager, fallback: String) async -> String {
-        let confirmed = await stream.confirmedTranscript
-        let volatileText = await stream.volatileTranscript
-        let joined = [confirmed, volatileText].filter { !$0.isEmpty }.joined(separator: " ")
-        return joined.isEmpty ? fallback : joined
+    /// The words in this window, joined. The card assembles windows. The
+    /// accumulated transcript glues the next window onto the previous one.
+    private static func windowText(_ update: SlidingWindowTranscriptionUpdate) -> String {
+        let words = buildWordTimings(from: update.tokenTimings).map(\.word).filter { !$0.isEmpty }
+        if !words.isEmpty { return words.joined(separator: " ") }
+        return update.text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func buffer(_ samples: [Float]) -> AVAudioPCMBuffer? {

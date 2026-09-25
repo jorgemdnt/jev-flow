@@ -97,3 +97,28 @@ import Testing
     #expect(stillHeld.edge == nil)
     #expect(stillHeld.sawDeviceBit == true)
 }
+
+@Test func aRouteChangeAbandonsAnOpenHold() {
+    #expect(HoldWatch.shouldAbandon(holding: true, routeChanged: true))
+    #expect(!HoldWatch.shouldAbandon(holding: false, routeChanged: true))
+    #expect(!HoldWatch.shouldAbandon(holding: true, routeChanged: false))
+}
+
+@Test func aSilentTapIsAliveAndAStoppedTapIsDead() {
+    #expect(!HoldWatch.tapDied(bytes: 3200, previousBytes: 1600, quietFor: .seconds(3)))
+    #expect(!HoldWatch.tapDied(bytes: 0, previousBytes: 0, quietFor: .milliseconds(400)))
+    #expect(HoldWatch.tapDied(bytes: 1600, previousBytes: 1600, quietFor: .milliseconds(1500)))
+}
+
+@Test func aSilentHoldEndsAndSpeechDoesNot() {
+    #expect(HoldWatch.noAudio(previewEmpty: true, silent: true, quietFor: .seconds(3)))
+    #expect(!HoldWatch.noAudio(previewEmpty: true, silent: false, quietFor: .seconds(5)))
+    #expect(!HoldWatch.noAudio(previewEmpty: false, silent: true, quietFor: .seconds(5)))
+    #expect(HoldWatch.noWords(previewEmpty: true, quietFor: .seconds(8)))
+    #expect(!HoldWatch.noWords(previewEmpty: false, quietFor: .seconds(20)))
+    #expect(!HoldWatch.insertAfterSilence(silentFor: .seconds(44)))
+    #expect(HoldWatch.insertAfterSilence(silentFor: .seconds(45)))
+    #expect(HoldWatch.escapeCancels(holding: true, keyCode: 53, keyDown: true))
+    #expect(!HoldWatch.escapeCancels(holding: false, keyCode: 53, keyDown: true))
+    #expect(!HoldWatch.escapeCancels(holding: true, keyCode: 0x3D, keyDown: true))
+}
