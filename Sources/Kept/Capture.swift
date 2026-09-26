@@ -326,7 +326,7 @@ final class Session {
             }
             guard edited.trimmingCharacters(in: .whitespacesAndNewlines) != selected else {
                 KeptLog.edit.notice("edit returned the selection unchanged")
-                self.showNotice("No change", "The instruction did not ask for a change. Try saying it again.")
+                self.showNotice("No change", "The model returned the same text. Say the change again.")
                 return
             }
             await self.replaceEdited(edited, previous: selected, copied: copied)
