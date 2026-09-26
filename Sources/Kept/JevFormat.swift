@@ -29,6 +29,9 @@ enum KeySource {
 
 enum JevFormat {
     private static let endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
+    /// Pinned. The confidence bars were measured on this version; `jev-latest`
+    /// moves when TypeSafe ships a new one.
+    static let model = "jev-1.13.0"
 
     static func prepare(raw: String, dictionary: [String]) async -> CleanupOutcome {
         let local = SpeechFormat.render(raw, shape: .prose, replacements: [], dictionary: dictionary)
@@ -38,10 +41,13 @@ enum JevFormat {
             return .local(local, note: "No TypeSafe key. Inserted local text.")
         }
         do {
-            let judgment = try await ask(corrected, dictionary: dictionary, key: key)
-            let text = SpeechFormat.render(raw, shape: judgment.shape, replacements: judgment.replacements, dictionary: dictionary)
+            let judgment = try await ask(raw: raw, corrected: corrected, dictionary: dictionary, key: key)
+            let respelled = Respell.apply(judgment.respell, to: raw)
+            let text = SpeechFormat.render(respelled, shape: judgment.shape, replacements: judgment.replacements, dictionary: dictionary)
             guard !text.isEmpty else { return .local(local, note: "Formatting failed. Inserted local text.") }
             return .model(text)
+        } catch FormatError.http(let status) where status == 401 || status == 403 {
+            return .local(local, note: "TypeSafe rejected the key. Inserted local text.")
         } catch {
             return .local(local, note: "Formatting failed. Inserted local text.")
         }
@@ -50,10 +56,11 @@ enum JevFormat {
     private struct Judgment {
         var shape: SpokenShape
         var replacements: [Replacement]
+        var respell: [Respell.Candidate]
     }
 
-    private static func ask(_ transcript: String, dictionary: [String], key: String) async throws -> Judgment {
-        let spans = SpeechFormat.candidates(in: transcript, entries: dictionary)
+    private static func ask(raw: String, corrected: String, dictionary: [String], key: String) async throws -> Judgment {
+        let spans = SpeechFormat.candidates(in: corrected, entries: dictionary)
         var questions: [String: Any] = [
             "shape": [
                 "type": "choice",
@@ -80,24 +87,58 @@ enum JevFormat {
                 "criteria": criteria,
             ]
         }
+        var respellIDs: [String: Respell.Candidate] = [:]
+        for candidate in Respell.candidates(in: raw) {
+            let id = "respell_\(candidate.index)"
+            respellIDs[id] = candidate
+            questions[id] = [
+                "type": "choice",
+                "instructions": "Speech recognition can confuse sound-alike words such as \(candidate.meant) and \(candidate.heard). The speaker works on software they build and release. Which sentence did the speaker most likely say?",
+                "criteria": ["heard": candidate.asHeard, "meant": candidate.asMeant],
+            ]
+        }
+        let body: [String: Any] = [
+            "state": ["transcript": corrected],
+            "model": model,
+            "questions": questions,
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: body)
+        let started = ContinuousClock.now
+        let (data, status) = try await post(payload, key: key)
+        let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
+        await MainActor.run { KeyStatus.shared.typeSafe = KeyHealth(status: status) }
+        guard (200..<300).contains(status) else {
+            KeptLog.format.error("Jev HTTP \(status) after \(ms) ms")
+            throw FormatError.http(status)
+        }
+        let judgment = try parse(data, wordIDs: wordIDs, respellIDs: respellIDs)
+        KeptLog.format.notice("Jev HTTP \(status) in \(ms) ms: shape \(judgment.shape.rawValue, privacy: .public), \(wordIDs.count) word questions, \(judgment.replacements.count) replaced, \(respellIDs.count) sound-alikes, \(judgment.respell.count) respelled")
+        return judgment
+    }
+
+    /// 429 and 529 are rate limits and overload. The docs ask for a backoff.
+    /// The paste is waiting, so retry once, briefly.
+    private static func post(_ payload: Data, key: String) async throws -> (Data, Int) {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 8
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        let body: [String: Any] = [
-            "state": ["transcript": transcript],
-            "model": "jev-latest",
-            "questions": questions,
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else { throw FormatError.http(status) }
-        return try parse(data, wordIDs: wordIDs)
+        request.httpBody = payload
+        var retried = false
+        while true {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let http = response as? HTTPURLResponse
+            let status = http?.statusCode ?? 0
+            guard status == 429 || status == 529, !retried else { return (data, status) }
+            retried = true
+            let wait = http?.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init).map { min($0, 1.5) } ?? 0.4
+            KeptLog.format.notice("Jev HTTP \(status), retrying in \(wait, format: .fixed(precision: 1)) s")
+            try await Task.sleep(for: .seconds(wait))
+        }
     }
 
-    private static func parse(_ data: Data, wordIDs: [String: String]) throws -> Judgment {
+    private static func parse(_ data: Data, wordIDs: [String: String], respellIDs: [String: Respell.Candidate]) throws -> Judgment {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let answers = json["answers"] as? [String: Any] else {
             throw FormatError.empty
@@ -112,7 +153,15 @@ enum JevFormat {
                   confidence >= SpeechFormat.minimumConfidence else { continue }
             replacements.append(Replacement(span: choice, word: entry))
         }
-        return Judgment(shape: shape, replacements: replacements)
+        var respell: [Respell.Candidate] = []
+        for (id, candidate) in respellIDs {
+            guard let answer = answers[id] as? [String: Any],
+                  let probabilities = answer["probabilities"] as? [String: Double],
+                  let meant = probabilities["meant"],
+                  meant >= Respell.minimumConfidence else { continue }
+            respell.append(candidate)
+        }
+        return Judgment(shape: shape, replacements: replacements, respell: respell)
     }
 
     private static func acceptedShape(_ answer: [String: Any]?) -> SpokenShape {

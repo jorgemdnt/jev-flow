@@ -58,6 +58,7 @@ enum OpenCodeClient {
             return nil
         }
         let status = (urlResponse as? HTTPURLResponse)?.statusCode ?? 0
+        await MainActor.run { KeyStatus.shared.openCode = KeyHealth(status: status) }
         guard (200..<300).contains(status) else {
             KeptLog.edit.error("OpenCode returned HTTP \(status)")
             return nil

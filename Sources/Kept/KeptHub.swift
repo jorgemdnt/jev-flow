@@ -225,6 +225,7 @@ private struct SettingsPage: View {
     @State private var draft = ""
     @State private var source = TypeSafeKey.source()
     @State private var failed = false
+    private let keys = KeyStatus.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -236,9 +237,17 @@ private struct SettingsPage: View {
             MicrophoneSettings(store: MicStore.shared)
             KeptCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(status)
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(status)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        if source == .saved {
+                            KeyHealthTag(health: keys.typeSafe) {
+                                Task { await keys.checkTypeSafe() }
+                            }
+                        }
+                    }
                     SecureField("TypeSafe API key", text: $draft)
                         .textFieldStyle(.plain)
                         .padding(.horizontal, 12)
@@ -267,6 +276,7 @@ private struct SettingsPage: View {
             }
         }
         .onAppear { source = TypeSafeKey.source() }
+        .task { await keys.checkTypeSafe() }
     }
 
     private var status: String {
@@ -281,12 +291,14 @@ private struct SettingsPage: View {
         if !failed {
             draft = ""
             source = TypeSafeKey.source()
+            Task { await keys.checkTypeSafe() }
         }
     }
 
     private func remove() {
         TypeSafeKey.delete()
         source = TypeSafeKey.source()
+        keys.typeSafe = .unknown
     }
 }
 
@@ -294,12 +306,21 @@ private struct OpenCodeKeyCard: View {
     @State private var draft = ""
     @State private var source = OpenCodeKey.source()
     @State private var failed = false
+    private let keys = KeyStatus.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Edit uses DeepSeek V4.1 Flash. \(source == .saved ? "OpenCode key saved." : "No OpenCode key saved yet.")")
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Edit uses DeepSeek V4.1 Flash. \(source == .saved ? "OpenCode key saved." : "No OpenCode key saved yet.")")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                if source == .saved {
+                    KeyHealthTag(health: keys.openCode) {
+                        Task { await keys.checkOpenCode() }
+                    }
+                }
+            }
             SecureField("OpenCode API key", text: $draft)
                 .textFieldStyle(.plain)
                 .padding(.horizontal, 12)
@@ -311,6 +332,7 @@ private struct OpenCodeKeyCard: View {
                     if !failed {
                         draft = ""
                         source = OpenCodeKey.source()
+                        Task { await keys.checkOpenCode() }
                     }
                 }
                 .buttonStyle(KeptPrimaryButton())
@@ -319,6 +341,7 @@ private struct OpenCodeKeyCard: View {
                     Button("Remove OpenCode key") {
                         OpenCodeKey.delete()
                         source = OpenCodeKey.source()
+                        keys.openCode = .unknown
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 13))
@@ -332,6 +355,41 @@ private struct OpenCodeKeyCard: View {
             }
         }
         .onAppear { source = OpenCodeKey.source() }
+        .task { await keys.checkOpenCode() }
+    }
+}
+
+/// The corner tag on a key card: a dot and a word. Click to check again.
+private struct KeyHealthTag: View {
+    let health: KeyHealth
+    let recheck: () -> Void
+
+    var body: some View {
+        Button(action: recheck) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 7, height: 7)
+                Text(health.label)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(health == .working ? Color.primary.opacity(0.75) : color)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Click to check the key again")
+        .disabled(health == .checking)
+    }
+
+    private var color: Color {
+        switch health {
+        case .working: .green
+        case .rejected: .red
+        case .unreachable: .orange
+        case .unknown, .checking: .secondary
+        }
     }
 }
 

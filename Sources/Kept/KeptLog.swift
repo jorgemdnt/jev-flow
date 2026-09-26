@@ -5,4 +5,5 @@ import os
 enum KeptLog {
     static let capture = Logger(subsystem: "local.kept.app", category: "capture")
     static let edit = Logger(subsystem: "local.kept.app", category: "edit")
+    static let format = Logger(subsystem: "local.kept.app", category: "format")
 }
