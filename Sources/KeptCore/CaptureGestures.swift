@@ -109,15 +109,26 @@ public enum HoldKeyCommand {
 
 /// The edit chord asks a model to change text. The hold does not.
 public enum EditPrompt {
+    public static let system = """
+    You edit a piece of text the user selected. The instruction was spoken and \
+    transcribed, so it may contain recognition errors; read it for intent. Apply \
+    it to the selected text and return only the edited selected text, with no \
+    quotes, labels, or commentary. Never return the instruction itself. If the \
+    instruction does not ask for a change you can make, return the selected text \
+    unchanged.
+    """
+
     public static func request(text: String, instruction: String) -> String {
         """
-        Edit the selected text. Apply the instruction. Return only the edited text.
-
-        Selected text:
+        <selected_text>
         \(text)
+        </selected_text>
 
-        Instruction:
+        <spoken_instruction>
         \(instruction)
+        </spoken_instruction>
+
+        Return the edited selected text only.
         """
     }
 

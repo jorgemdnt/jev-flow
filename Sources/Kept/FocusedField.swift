@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -50,12 +51,30 @@ enum FocusedField {
     }
 
     static func selectedText() -> String? {
-        guard let element = element() else { return nil }
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &value) == .success else {
-            return nil
+        selectionRead().text
+    }
+
+    /// The selection, plus which step failed when there is none. The log gets
+    /// the step and a length, never the selected words.
+    struct SelectionRead {
+        var text: String?
+        var app: String
+        var outcome: String
+    }
+
+    static func selectionRead() -> SelectionRead {
+        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+        let (focused, found) = focusedElement()
+        guard let focused else {
+            return SelectionRead(text: nil, app: app, outcome: "no focused element (AX \(found.rawValue))")
         }
-        return value as? String
+        var value: CFTypeRef?
+        let read = AXUIElementCopyAttributeValue(focused, kAXSelectedTextAttribute as CFString, &value)
+        guard read == .success else {
+            return SelectionRead(text: nil, app: app, outcome: "selected text unreadable (AX \(read.rawValue))")
+        }
+        let text = value as? String
+        return SelectionRead(text: text, app: app, outcome: "\(text?.count ?? 0) chars")
     }
 
     static func deleteSelection() -> Bool {
@@ -81,11 +100,34 @@ enum FocusedField {
     }
 
     private static func element() -> AXUIElement? {
+        focusedElement().element
+    }
+
+    /// Electron and Chromium apps build no accessibility tree until a client
+    /// asks for one, so the system-wide query answers -25212 (no value) and a
+    /// selection there reads as none. Ask the frontmost app itself, with the
+    /// tree switched on.
+    private static func focusedElement() -> (element: AXUIElement?, error: AXError) {
         let system = AXUIElementCreateSystemWide()
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value) == .success,
-              let value else { return nil }
-        return (value as! AXUIElement)
+        let found = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &value)
+        if found == .success, let value { return ((value as! AXUIElement), found) }
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return (nil, found) }
+        let app = AXUIElementCreateApplication(pid)
+        enableTree(app)
+        var appValue: CFTypeRef?
+        let appFound = AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &appValue)
+        guard appFound == .success, let appValue else { return (nil, appFound) }
+        return ((appValue as! AXUIElement), appFound)
+    }
+
+    /// Call when an app comes to the front, so its tree is built before a hold.
+    static func enableTree(pid: pid_t) {
+        enableTree(AXUIElementCreateApplication(pid))
+    }
+
+    private static func enableTree(_ app: AXUIElement) {
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
     }
 
     private static func selectedRange(of element: AXUIElement) -> CFRange? {

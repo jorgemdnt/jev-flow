@@ -60,11 +60,39 @@ enum FocusedAppPaste {
         try? await Task.sleep(for: .milliseconds(120))
     }
 
+    /// Some apps (Electron, Chromium) do not expose the selected text to
+    /// Accessibility. Copy it instead, then put the pasteboard back.
+    static func copySelection() async -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        let board = NSPasteboard.general
+        let saved = snapshot(of: board)
+        let before = board.changeCount
+        guard postCommand(0x08) else { return nil }
+        var copied: String?
+        for _ in 0..<12 {
+            try? await Task.sleep(for: .milliseconds(25))
+            if board.changeCount != before {
+                copied = board.string(forType: .string)
+                break
+            }
+        }
+        if board.changeCount != before {
+            restore(saved, to: board)
+        }
+        return copied
+    }
+
     /// 0x09 is kVK_ANSI_V.
     private static func postCommandV() -> Bool {
+        postCommand(0x09)
+    }
+
+    /// Flags are set to Command alone: the live Right Option and Right Command
+    /// would otherwise ride along on the posted key.
+    private static func postCommand(_ key: CGKeyCode) -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) else {
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else {
             return false
         }
         down.flags = .maskCommand

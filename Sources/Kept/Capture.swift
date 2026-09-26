@@ -53,6 +53,8 @@ final class Session {
     @ObservationIgnored private var editing = false
     @ObservationIgnored private var locked = false
     @ObservationIgnored private var editSelection = ""
+    @ObservationIgnored private var editSelectionCopied = false
+    @ObservationIgnored private var copyTask: Task<Void, Never>?
     @ObservationIgnored private var lastInsertLocation: Int?
     @ObservationIgnored private var lastInsertLength = 0
     var caretNote = ""
@@ -101,8 +103,10 @@ final class Session {
 
     private func optionDown(_ commandDown: Bool, at ms: Int) {
         armTask?.cancel()
-        let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let read = FocusedField.selectionRead()
+        let selected = read.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let effect = gestures.optionDown(at: ms, commandDown: commandDown, selection: selected)
+        KeptLog.edit.notice("option down: app \(read.app, privacy: .public), selection \(read.outcome, privacy: .public), right command \(commandDown), effect \(String(describing: effect), privacy: .public)")
         apply(effect)
     }
 
@@ -144,13 +148,24 @@ final class Session {
                 showNotice("No OpenCode key", "Save one in Settings.")
                 return
             }
-            guard let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty else {
-                gestures = CaptureGestures()
-                showNotice("Select text", "Select the text you want to change first.")
-                return
+            let read = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            copyTask?.cancel()
+            copyTask = nil
+            editSelectionCopied = false
+            if read.isEmpty {
+                // Right Command is down but Accessibility shows no selection.
+                // Electron and Chromium apps hide it; copy it instead.
+                copyTask = Task { @MainActor [weak self] in
+                    let copied = await FocusedAppPaste.copySelection()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    KeptLog.edit.notice("selection copied: \(copied.count) chars")
+                    guard let self, self.editing, !copied.isEmpty else { return }
+                    self.editSelection = copied
+                    self.editSubject = copied
+                    self.editSelectionCopied = true
+                }
             }
-            editSelection = selected
-            editSubject = selected
+            editSelection = read
+            editSubject = read
             editKind = "Selection"
             editing = true
             locked = false
@@ -263,8 +278,8 @@ final class Session {
         watchTask?.cancel()
         watchTask = nil
         held = false
-        let selected = editSelection
-        guard recording, let wav = activeWav, !selected.isEmpty else {
+        KeptLog.edit.notice("edit release: recording \(self.recording), selection \(self.editSelection.count) chars")
+        guard recording, let wav = activeWav else {
             showNotice("No instruction", "Say what to change, then release.")
             return
         }
@@ -282,7 +297,16 @@ final class Session {
         busy = true
         status = "Editing…"
         livePhase = .transcribing
+        let copying = copyTask
         finishTask = Task {
+            await copying?.value
+            let selected = self.editSelection
+            let copied = self.editSelectionCopied
+            guard !selected.isEmpty else {
+                try? FileManager.default.removeItem(at: wav)
+                self.showNotice("Select text", "Select the text you want to change first.")
+                return
+            }
             let instruction: String
             do {
                 instruction = try await self.transcribe(wav)
@@ -292,6 +316,7 @@ final class Session {
                 return
             }
             try? FileManager.default.removeItem(at: wav)
+            KeptLog.edit.notice("edit instruction: \(duration, format: .fixed(precision: 1))s audio, \(instruction.split(separator: " ").count) words, selection \(selected.count) chars\(copied ? " (copied)" : "", privacy: .public)")
             guard let edited = await OpenCodeClient.edit(text: selected, instruction: instruction), !edited.isEmpty else {
                 self.showNotice(
                     OpenCodeKey.load() == nil ? "No OpenCode key" : "Edit failed",
@@ -299,23 +324,34 @@ final class Session {
                 )
                 return
             }
-            await self.replaceEdited(edited, previous: selected)
+            guard edited.trimmingCharacters(in: .whitespacesAndNewlines) != selected else {
+                KeptLog.edit.notice("edit returned the selection unchanged")
+                self.showNotice("No change", "The instruction did not ask for a change. Try saying it again.")
+                return
+            }
+            await self.replaceEdited(edited, previous: selected, copied: copied)
         }
     }
 
-    private func replaceEdited(_ edited: String, previous: String) async {
+    private func replaceEdited(_ edited: String, previous: String, copied: Bool) async {
         let replacement = edited.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !replacement.isEmpty else {
             showNotice("Edit failed", "The model did not return a change.")
             return
         }
         await FocusedAppPaste.focusForeignAppIfNeeded()
-        let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard selected == previous else {
+        let read = FocusedField.selectionRead()
+        let selected = read.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A copied selection cannot be re-read through Accessibility; trust
+        // that the app still holds it, since a paste replaces a selection.
+        guard copied || selected == previous else {
+            KeptLog.edit.error("selection changed before replace: app \(read.app, privacy: .public), \(read.outcome, privacy: .public), expected \(previous.count) chars")
             showNotice("Selection changed", "Select that text again.")
             return
         }
-        switch FocusedAppPaste.paste(replacement) {
+        let pasted = FocusedAppPaste.paste(replacement)
+        KeptLog.edit.notice("replace in \(read.app, privacy: .public): \(String(describing: pasted), privacy: .public)")
+        switch pasted {
         case .pasted:
             lastInsertedText = replacement
             lastInsertLocation = nil

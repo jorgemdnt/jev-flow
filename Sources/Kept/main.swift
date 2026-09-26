@@ -11,6 +11,15 @@ final class KeptDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         chrome = KeptChrome(session: session)
         chrome?.install()
+        if let front = NSWorkspace.shared.frontmostApplication {
+            FocusedField.enableTree(pid: front.processIdentifier)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            FocusedField.enableTree(pid: app.processIdentifier)
+        }
     }
 }
 

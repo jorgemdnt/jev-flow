@@ -27,7 +27,8 @@ enum OpenCodeKey {
 
 enum OpenCodeClient {
     static let model = "deepseek-v4.1-flash"
-    private static let endpoint = URL(string: "https://opencode.ai/zen/v1/chat/completions")!
+    static let endpoint = URL(string: "https://opencode.ai/zen/v1/chat/completions")!
+    static let userAgent = "JevFlow/1.0"
 
     static func edit(text: String, instruction: String) async -> String? {
         guard let key = OpenCodeKey.load() else { return nil }
@@ -35,22 +36,34 @@ enum OpenCodeClient {
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("JevFlow/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         let budget = max(4096, text.count + instruction.count + 1200)
         let body: [String: Any] = [
             "model": model,
             "reasoning_effort": "medium",
             "max_tokens": budget,
             "messages": [
-                ["role": "system", "content": "Return only the edited text."],
+                ["role": "system", "content": EditPrompt.system],
                 ["role": "user", "content": EditPrompt.request(text: text, instruction: instruction)],
             ],
         ]
         guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
         request.httpBody = payload
-        guard let (data, urlResponse) = try? await URLSession.shared.data(for: request),
-              let http = urlResponse as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else { return nil }
-        return EditPrompt.text(from: data)
+        let data: Data
+        let urlResponse: URLResponse
+        do {
+            (data, urlResponse) = try await URLSession.shared.data(for: request)
+        } catch {
+            KeptLog.edit.error("OpenCode request failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        let status = (urlResponse as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            KeptLog.edit.error("OpenCode returned HTTP \(status)")
+            return nil
+        }
+        let edited = EditPrompt.text(from: data)
+        KeptLog.edit.notice("OpenCode HTTP \(status), edited text \(edited?.count ?? 0) chars")
+        return edited
     }
 }
