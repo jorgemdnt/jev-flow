@@ -435,6 +435,21 @@ final class Session {
                 silentSince = now
                 continue
             }
+            if let recovery = mic.recoverFromDropout() {
+                _ = InputDevices.consumeRouteChange()
+                switch recovery {
+                case .restarted(let dead):
+                    KeptLog.capture.notice("input dropped to exact zeros; cut \(dead, format: .fixed(precision: 2))s and restarted input (restart \(self.mic.restarts))")
+                    lastBytes = mic.byteCount()
+                    quietSince = now
+                    silentSince = now
+                    continue
+                case .failed:
+                    KeptLog.capture.error("input dropped to exact zeros and did not restart")
+                    finishFromSilence()
+                    return
+                }
+            }
             let bytes = mic.byteCount()
             if bytes != lastBytes {
                 lastBytes = bytes
@@ -592,6 +607,7 @@ final class Session {
             return
         }
         remember(id: id, wav: wav, transcript: transcript, duration: duration)
+        KeptLog.capture.notice("take \(id.uuidString.prefix(8), privacy: .public): \(duration, format: .fixed(precision: 1))s audio, \(transcript.split(separator: " ").count) words")
         let decision = InsertDecision(transcript: transcript, durationSeconds: duration)
         let outcome: CleanupOutcome
         if decision.autoInsert {
@@ -987,7 +1003,14 @@ final class MicRecorder: @unchecked Sendable {
     private var appliedUID: String?
     private var tapInstalled = false
     private var destination: URL?
+    private var dropout = InputDropout()
+    private(set) var restarts = 0
     private(set) var deviceName = ""
+
+    enum Recovery {
+        case restarted(deadSeconds: Double)
+        case failed
+    }
 
     func granted() async -> Bool {
         switch AVAudioApplication.shared.recordPermission {
@@ -1015,6 +1038,17 @@ final class MicRecorder: @unchecked Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let uid = MicStore.savedUID()
         let engine = try prepare(uid: uid)
+        lock.lock()
+        pcm.removeAll(keepingCapacity: true)
+        dropout.reset()
+        lock.unlock()
+        self.destination = url
+        restarts = 0
+        try run(engine)
+    }
+
+    /// Starts delivery into the buffer. Audio already in the buffer stays.
+    private func run(_ engine: AVAudioEngine) throws {
         let input = engine.inputNode
         if tapInstalled {
             input.removeTap(onBus: 0)
@@ -1022,10 +1056,6 @@ final class MicRecorder: @unchecked Sendable {
         }
         let hardware = input.outputFormat(forBus: 0)
         guard hardware.sampleRate > 0, hardware.channelCount > 0 else { throw RecorderError.failed }
-        lock.lock()
-        pcm.removeAll(keepingCapacity: true)
-        lock.unlock()
-        self.destination = url
         input.installTap(onBus: 0, bufferSize: 4096, format: hardware) { [weak self] buffer, _ in
             self?.append(buffer)
         }
@@ -1062,6 +1092,37 @@ final class MicRecorder: @unchecked Sendable {
         appliedUID = uid
         self.engine = engine
         return engine
+    }
+
+    /// A Bluetooth headset dropped its voice link and the tap is recording
+    /// zeros. Cut that dead air and restart input: a new start asks the headset
+    /// for the link again. Speech already in the buffer stays.
+    func recoverFromDropout() -> Recovery? {
+        lock.lock()
+        guard dropout.dropped else {
+            lock.unlock()
+            return nil
+        }
+        let dead = Self.cutDeadTail(&pcm)
+        dropout.reset()
+        lock.unlock()
+        guard let engine else { return .failed }
+        engine.stop()
+        do {
+            try run(engine)
+        } catch {
+            return .failed
+        }
+        restarts += 1
+        return .restarted(deadSeconds: Double(dead) / SpeechAudio.sampleRate)
+    }
+
+    private static func cutDeadTail(_ data: inout Data) -> Int {
+        let dead = data.withUnsafeBytes { raw in
+            InputDropout.trailingZeros(raw.bindMemory(to: Int16.self))
+        }
+        if dead > 0 { data.removeLast(dead * 2) }
+        return dead
     }
 
     func stop() -> Double {
@@ -1108,6 +1169,9 @@ final class MicRecorder: @unchecked Sendable {
         guard !chunk.isEmpty else { return }
         lock.lock()
         pcm.append(chunk)
+        chunk.withUnsafeBytes { raw in
+            dropout.feed(raw.bindMemory(to: Int16.self))
+        }
         lock.unlock()
     }
 
@@ -1152,6 +1216,10 @@ final class MicRecorder: @unchecked Sendable {
 
     private func writeKeptFile() -> Double {
         lock.lock()
+        if dropout.dropped {
+            _ = Self.cutDeadTail(&pcm)
+            dropout.reset()
+        }
         let data = pcm
         let url = destination
         lock.unlock()
