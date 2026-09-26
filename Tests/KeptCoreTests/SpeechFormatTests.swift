@@ -44,6 +44,20 @@ import Testing
     #expect(text.contains("Pedro"))
 }
 
+@Test func aHandleWhoseNameIsTheWholeHandleGetsOneAt() {
+    let people = ["@felipe.menezes", "@joseph", "@pedro.vivaldi"]
+    let text = SpeechFormat.render("I'm pretty sure Joseph was complaining, and Joseph agreed", shape: .prose, replacements: [], dictionary: people)
+    #expect(text.contains("sure @joseph was"))
+    #expect(text.contains("and @joseph agreed"))
+    #expect(!text.contains("@@"))
+}
+
+@Test func aWrittenHandleIsLeftAlone() {
+    let text = SpeechFormat.render("ping @felipe.menezes about it", shape: .prose, replacements: [], dictionary: ["@felipe.menezes"])
+    #expect(text.contains("@felipe.menezes about"))
+    #expect(!text.contains("@@"))
+}
+
 @Test func rtIsArtieWhenArtieIsInTheDictionary() {
     let text = SpeechFormat.render("We need to ship RT.", shape: .prose, replacements: [], dictionary: ["Artie"])
     #expect(text == "We need to ship Artie.")

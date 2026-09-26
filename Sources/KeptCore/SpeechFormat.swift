@@ -108,15 +108,7 @@ public enum SpeechFormat {
         }
         var result = text
         for (span, word) in planned.sorted(by: { $0.0.count > $1.0.count }) {
-            var next = result
-            var guardCount = 0
-            while guardCount < 6 {
-                let replaced = replaceSpan(span, with: word, in: next)
-                if replaced == next { break }
-                next = replaced
-                guardCount += 1
-            }
-            result = next
+            result = replaceEverySpan(span, with: word, in: result)
         }
         return result.replacingOccurrences(of: "(?i)\\bat\\s+@", with: "@", options: .regularExpression)
     }
@@ -229,18 +221,42 @@ public enum SpeechFormat {
     }
 
     private static func replaceSpan(_ span: String, with word: String, in text: String) -> String {
+        guard let range = spanRange(span, in: text, from: text.startIndex) else { return text }
+        return text.replacingCharacters(in: range, with: word)
+    }
+
+    /// Replaces each standalone occurrence once. The search resumes after the
+    /// inserted word, so "joseph" inside a pasted "@joseph" is not matched again.
+    static func replaceEverySpan(_ span: String, with word: String, in text: String) -> String {
+        var result = text
+        var search = result.startIndex
+        while let range = spanRange(span, in: result, from: search) {
+            let offset = result.distance(from: result.startIndex, to: range.lowerBound) + word.count
+            result.replaceSubrange(range, with: word)
+            search = result.index(result.startIndex, offsetBy: offset)
+        }
+        return result
+    }
+
+    /// A span is a whole word: no letter next to it, and not the tail of an
+    /// @handle or a dotted name that is already written out.
+    private static func spanRange(_ span: String, in text: String, from start: String.Index) -> Range<String.Index>? {
         let needle = span.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return text }
-        var search = text.startIndex
-        while let range = text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive], range: search..<text.endIndex) {
-            let before = range.lowerBound == text.startIndex || !text[text.index(before: range.lowerBound)].isLetter
+        guard !needle.isEmpty else { return nil }
+        var search = start
+        while search < text.endIndex,
+              let range = text.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive], range: search..<text.endIndex) {
+            let before = range.lowerBound == text.startIndex || !isWordJoin(text[text.index(before: range.lowerBound)])
             let after = range.upperBound == text.endIndex || !text[range.upperBound].isLetter
-            if before && after {
-                return text.replacingCharacters(in: range, with: word)
-            }
+                && !(text[range.upperBound] == "." && text.index(after: range.upperBound) < text.endIndex && text[text.index(after: range.upperBound)].isLetter)
+            if before && after { return range }
             search = range.upperBound
         }
-        return text
+        return nil
+    }
+
+    private static func isWordJoin(_ character: Character) -> Bool {
+        character.isLetter || character == "@" || character == "."
     }
 
     private static func levenshtein(_ left: String, _ right: String) -> Int {
