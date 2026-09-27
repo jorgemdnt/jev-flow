@@ -55,6 +55,9 @@ final class Session {
     @ObservationIgnored private var editSelection = ""
     @ObservationIgnored private var editSelectionCopied = false
     @ObservationIgnored private var copyTask: Task<Void, Never>?
+    @ObservationIgnored private var selectionProbe: Task<Void, Never>?
+    @ObservationIgnored private var keyEvents: Task<Void, Never>?
+    @ObservationIgnored private var startTask: Task<Void, Never>?
     @ObservationIgnored private var lastInsertLocation: Int?
     @ObservationIgnored private var lastInsertLength = 0
     var caretNote = ""
@@ -63,19 +66,29 @@ final class Session {
     var noticeTitle = ""
     var noticeBody = ""
 
-    init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory)) {
+    init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory), startCapture: Bool = true) {
         self.store = store
         takes = (try? store.load()) ?? []
         lastInsertedText = Self.readLastInserted() ?? takes.compactMap(\.insertedText).first ?? ""
+        guard startCapture else { return }
         try? FileManager.default.createDirectory(at: KeptPaths.takesDirectory, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: KeptPaths.modelsDirectory, withIntermediateDirectories: true)
         monitor.onDown = { [weak self] commandDown in
             let at = Session.milliseconds()
-            Task { @MainActor in self?.optionDown(commandDown, at: at) }
+            Task { @MainActor [weak self] in
+                self?.queueKeyEvent { session in session.optionDown(commandDown, at: at) }
+            }
+        }
+        monitor.onCommandDown = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.queueKeyEvent { session in session.apply(session.gestures.switchToEdit()) }
+            }
         }
         monitor.onUp = { [weak self] in
             let at = Session.milliseconds()
-            Task { @MainActor in self?.optionUp(at: at) }
+            Task { @MainActor [weak self] in
+                self?.queueKeyEvent { session in await session.optionUp(at: at) }
+            }
         }
         monitor.onCancel = { [weak self] in
             Task { @MainActor in self?.cancelHold() }
@@ -97,6 +110,15 @@ final class Session {
         }
     }
 
+    private func queueKeyEvent(_ action: @escaping @MainActor (Session) async -> Void) {
+        let previous = keyEvents
+        keyEvents = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            await action(self)
+        }
+    }
+
     private static func milliseconds() -> Int {
         Int(Date().timeIntervalSince1970 * 1000)
     }
@@ -107,10 +129,32 @@ final class Session {
         let selected = read.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let effect = gestures.optionDown(at: ms, commandDown: commandDown, selection: selected)
         KeptLog.edit.notice("option down: app \(read.app, privacy: .public), selection \(read.outcome, privacy: .public), right command \(commandDown), effect \(String(describing: effect), privacy: .public)")
-        apply(effect)
+        for transition in CaptureTransitions.optionDown(effect, priorCaptureActive: held || recording || arming) {
+            apply(transition)
+        }
+        if read.text == nil, !commandDown, effect == .startHold {
+            let generation = holdGeneration
+            selectionProbe = Task { @MainActor [weak self] in
+                let copied = await FocusedAppPaste.copySelection()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard let self, !Task.isCancelled, !copied.isEmpty, self.held, self.holdGeneration == generation else { return }
+                let change = self.gestures.switchToEdit()
+                guard change == .switchToEdit else { return }
+                self.beginEdit(copied: copied, reuseHold: true)
+            }
+        }
     }
 
-    private func optionUp(at ms: Int) {
+    private func optionUp(at ms: Int) async {
+        let generation = holdGeneration
+        await CaptureTransitions.release(
+            mode: gestures.mode,
+            probe: selectionProbe,
+            stillCurrent: { [weak self] in self?.held == true && self?.holdGeneration == generation },
+            finish: { [weak self] in self?.finishOptionUp(at: ms) }
+        )
+    }
+
+    private func finishOptionUp(at ms: Int) {
         let effect = gestures.optionUp(at: ms)
         apply(effect)
         if case .armed = gestures.mode {
@@ -143,34 +187,9 @@ final class Session {
             livePhase = .locked
             status = "Tap Right Option to stop"
         case .startEdit:
-            guard OpenCodeKey.load() != nil else {
-                gestures = CaptureGestures()
-                showNotice("No OpenCode key", "Save one in Settings.")
-                return
-            }
-            let read = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            copyTask?.cancel()
-            copyTask = nil
-            editSelectionCopied = false
-            if read.isEmpty {
-                // Right Command is down but Accessibility shows no selection.
-                // Electron and Chromium apps hide it; copy it instead.
-                copyTask = Task { @MainActor [weak self] in
-                    let copied = await FocusedAppPaste.copySelection()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    KeptLog.edit.notice("selection copied: \(copied.count) chars")
-                    guard let self, self.editing, !copied.isEmpty else { return }
-                    self.editSelection = copied
-                    self.editSubject = copied
-                    self.editSelectionCopied = true
-                }
-            }
-            editSelection = read
-            editSubject = read
-            editKind = "Selection"
-            editing = true
-            locked = false
-            beginHold()
-            livePhase = .editing
+            beginEdit(reuseHold: false)
+        case .switchToEdit:
+            beginEdit(reuseHold: true)
         case .finish:
             locked = false
             endHold()
@@ -180,6 +199,47 @@ final class Session {
             editing = false
             locked = false
             endEdit()
+        }
+    }
+
+    private func beginEdit(copied: String? = nil, reuseHold: Bool) {
+        let priorProbe = selectionProbe
+        selectionProbe?.cancel()
+        selectionProbe = nil
+        guard OpenCodeKey.load() != nil else {
+            if reuseHold { abandon("Edit cancelled.") } else { gestures = CaptureGestures() }
+            showNotice("No OpenCode key", "Save one in Settings.")
+            return
+        }
+        let read = FocusedField.selectionRead()
+        let selection = EditSelection.capture(accessibility: read.text, clipboard: copied)
+        copyTask?.cancel()
+        copyTask = nil
+        editSelection = selection.text
+        editSubject = selection.text
+        editSelectionCopied = selection.copied
+        editKind = "Selection"
+        editing = true
+        locked = false
+        if reuseHold {
+            livePhase = .editing
+            status = "Say the change"
+        } else {
+            beginHold()
+        }
+        if selection.text.isEmpty {
+            let generation = holdGeneration
+            copyTask = Task { @MainActor [weak self] in
+                await priorProbe?.value
+                guard !Task.isCancelled else { return }
+                let copied = await FocusedAppPaste.copySelection()
+                let selection = EditSelection.capture(accessibility: nil, clipboard: copied)
+                KeptLog.edit.notice("selection copied: \(selection.text.count) chars")
+                guard let self, !Task.isCancelled, self.holdGeneration == generation, !selection.text.isEmpty else { return }
+                self.editSelection = selection.text
+                self.editSubject = selection.text
+                self.editSelectionCopied = selection.copied
+            }
         }
     }
 
@@ -235,7 +295,11 @@ final class Session {
         status = editing ? "Say the change" : "Recording…"
         watchTask?.cancel()
         watchTask = Task { await self.watchHold(generation) }
-        Task { await startRecordingIfStillHeld(generation) }
+        let priorStart = startTask
+        startTask = Task {
+            await priorStart?.value
+            await startRecordingIfStillHeld(generation)
+        }
     }
 
     func endHold() {
@@ -274,13 +338,28 @@ final class Session {
         }
     }
 
+    private func showMissingEditInput(generation: Int) {
+        guard holdGeneration == generation else { return }
+        holdGeneration += 1
+        if editSelection.isEmpty {
+            showNotice("Select text", "Select the text you want to change first.")
+        } else {
+            showNotice("No instruction", "Say what to change, then release.")
+        }
+    }
+
     private func endEdit() {
         watchTask?.cancel()
         watchTask = nil
         held = false
         KeptLog.edit.notice("edit release: recording \(self.recording), selection \(self.editSelection.count) chars")
         guard recording, let wav = activeWav else {
-            showNotice("No instruction", "Say what to change, then release.")
+            let copying = copyTask
+            let generation = holdGeneration
+            Task {
+                await copying?.value
+                self.showMissingEditInput(generation: generation)
+            }
             return
         }
         let duration = mic.stop()
@@ -291,7 +370,12 @@ final class Session {
         partialTask = nil
         guard SpeechAudio.accepts(durationSeconds: duration) else {
             try? FileManager.default.removeItem(at: wav)
-            showNotice("No instruction", "Say what to change, then release.")
+            let copying = copyTask
+            let generation = holdGeneration
+            Task {
+                await copying?.value
+                self.showMissingEditInput(generation: generation)
+            }
             return
         }
         busy = true
@@ -317,19 +401,21 @@ final class Session {
             }
             try? FileManager.default.removeItem(at: wav)
             KeptLog.edit.notice("edit instruction: \(duration, format: .fixed(precision: 1))s audio, \(instruction.split(separator: " ").count) words, selection \(selected.count) chars\(copied ? " (copied)" : "", privacy: .public)")
-            guard let edited = await OpenCodeClient.edit(text: selected, instruction: instruction), !edited.isEmpty else {
+            let edited = await OpenCodeClient.edit(text: selected, instruction: instruction)
+            switch EditDecision.decide(selection: selected, response: edited) {
+            case .noSelection:
+                self.showNotice("Select text", "Select the text you want to change first.")
+            case .failed:
                 self.showNotice(
                     OpenCodeKey.load() == nil ? "No OpenCode key" : "Edit failed",
                     OpenCodeKey.load() == nil ? "Save one in Settings." : "The model did not return a change."
                 )
-                return
-            }
-            guard edited.trimmingCharacters(in: .whitespacesAndNewlines) != selected else {
+            case .unchanged:
                 KeptLog.edit.notice("edit returned the selection unchanged")
                 self.showNotice("No change", "The model returned the same text. Say the change again.")
-                return
+            case .replace(let replacement):
+                await self.replaceEdited(replacement, previous: selected, copied: copied)
             }
-            await self.replaceEdited(edited, previous: selected, copied: copied)
         }
     }
 
@@ -341,10 +427,15 @@ final class Session {
         }
         await FocusedAppPaste.focusForeignAppIfNeeded()
         let read = FocusedField.selectionRead()
-        let selected = read.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        // A copied selection cannot be re-read through Accessibility; trust
-        // that the app still holds it, since a paste replaces a selection.
-        guard copied || selected == previous else {
+        let current: String?
+        if let text = read.text {
+            current = text
+        } else if copied {
+            current = await FocusedAppPaste.copySelection()
+        } else {
+            current = nil
+        }
+        guard EditDecision.matchesSelection(current, expected: previous) else {
             KeptLog.edit.error("selection changed before replace: app \(read.app, privacy: .public), \(read.outcome, privacy: .public), expected \(previous.count) chars")
             showNotice("Selection changed", "Select that text again.")
             return
@@ -540,7 +631,7 @@ final class Session {
             guard held, generation == holdGeneration else {
                 _ = mic.stop()
                 try? FileManager.default.removeItem(at: wav)
-                clearListening()
+                if generation == holdGeneration { clearListening() }
                 return
             }
         } catch {
@@ -553,7 +644,7 @@ final class Session {
         guard held, generation == holdGeneration else {
             _ = mic.stop()
             try? FileManager.default.removeItem(at: wav)
-            clearListening()
+            if generation == holdGeneration { clearListening() }
             return
         }
         activeID = id
@@ -618,7 +709,11 @@ final class Session {
                 holdGeneration += 1
                 let generation = holdGeneration
                 watchTask = Task { await self.watchHold(generation) }
-                Task { await startRecordingIfStillHeld(generation) }
+                let priorStart = startTask
+                startTask = Task {
+                    await priorStart?.value
+                    await startRecordingIfStillHeld(generation)
+                }
             } else if !monitor.isDown {
                 held = false
             }
@@ -655,7 +750,7 @@ final class Session {
         } else {
             outcome = .local("", note: "")
         }
-        let message = deliver(
+        let message = await deliver(
             id: id,
             raw: transcript,
             duration: duration,
@@ -703,7 +798,7 @@ final class Session {
         anchor: String,
         prepared: String,
         cleanupNote: String?
-    ) -> String {
+    ) async -> String {
         let decision = InsertDecision(transcript: raw, durationSeconds: duration)
         guard decision.autoInsert else {
             return Self.keptNotPasted
@@ -714,7 +809,7 @@ final class Session {
             return idleStatus()
         }
         let idle = (cleanupNote?.isEmpty == false) ? cleanupNote! : idleStatus()
-        switch place(text, typeSeparator: TakeJoin.needsSeparator(previous: anchor, next: prepared, field: field)) {
+        switch await place(text, typeSeparator: TakeJoin.needsSeparator(previous: anchor, next: prepared, field: field)) {
         case .placed(let placed):
             recordInserted(id: id, text: placed)
             return idle
@@ -727,7 +822,7 @@ final class Session {
         }
     }
 
-    private func place(_ text: String, typeSeparator: Bool = false) -> PlaceResult {
+    private func place(_ text: String, typeSeparator: Bool = false) async -> PlaceResult {
         let body = Self.pasteBody(text)
         switch FocusedField.caretForInsert() {
         case .selectionCouldNotCollapse:
@@ -747,7 +842,13 @@ final class Session {
                 return .failed
             }
         case .unavailable:
-            if let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty {
+            let selected: String?
+            if let text = FocusedField.selectedText() {
+                selected = text
+            } else {
+                selected = await FocusedAppPaste.copySelection()
+            }
+            if let selected, !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return .wouldReplaceSelection
             }
             if typeSeparator { _ = FocusedAppPaste.typeSpace() }
@@ -935,6 +1036,7 @@ final class RightOptionMonitor {
     static let keyCode: UInt16 = 0x3D
 
     var onDown: (Bool) -> Void = { _ in }
+    var onCommandDown: () -> Void = {}
     var onUp: () -> Void = {}
     var onCancel: () -> Void = {}
     private(set) var globalInstalled = false
@@ -991,6 +1093,10 @@ final class RightOptionMonitor {
         }
         guard event.type == .flagsChanged else { return }
         let flags = UInt64(event.modifierFlags.rawValue)
+        if event.keyCode == 0x36, down, HoldKeyCommand.rightCommandDown(flags: flags) {
+            onCommandDown()
+            return
+        }
         guard let edge = HoldKey.event(wasDown: down, keyCode: event.keyCode, flags: flags) else { return }
         if edge == .down {
             begin(commandDown: HoldKeyCommand.rightCommandDown(flags: flags))

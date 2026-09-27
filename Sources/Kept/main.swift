@@ -34,6 +34,14 @@ struct KeptApp: App {
     }
 }
 
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--ui-snapshot" {
+    let directory = CommandLine.arguments[2]
+    let window = UISnapshot.save(in: directory)
+    let cards = LiveCardSnapshot.save(in: directory)
+    FileHandle.standardOutput.write(Data("window_snapshots \(window) card_snapshots \(cards)\n".utf8))
+    exit(window && cards ? 0 : 1)
+}
+
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--transcribe" {
     let path = CommandLine.arguments[2]
     let box = TranscribeBox()
@@ -55,10 +63,32 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--transcribe" 
     exit(box.code)
 }
 
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--render-edit-card" {
+    let path = CommandLine.arguments[2]
+    let dark = CommandLine.arguments.contains("dark")
+    let long = CommandLine.arguments.contains("long")
+    exit(EditCardSnapshot.save(to: path, dark: dark, long: long) ? 0 : 1)
+}
+
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--probe-edit" {
+    let box = TranscribeBox()
+    Task { @MainActor in
+        let result = await OpenCodeClient.edit(text: "Ship it tomorrow.", instruction: "Change tomorrow to Friday.")
+        FileHandle.standardOutput.write(Data("edit_probe_response_chars \(result?.count ?? 0)\nedit_probe_matches_expected \(result == "Ship it Friday.")\n".utf8))
+        box.code = result == "Ship it Friday." ? 0 : 1
+        box.complete = true
+    }
+    while !box.complete {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+    exit(box.code)
+}
+
 KeptApp.main()
 
 private final class TranscribeBox: @unchecked Sendable {
     var code: Int32 = 1
+    var complete = false
 }
 
 private extension Duration {

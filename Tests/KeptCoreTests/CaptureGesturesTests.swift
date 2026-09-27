@@ -57,6 +57,99 @@ import Testing
     #expect(gestures.optionUp(at: 2_000) == .none)
 }
 
+@Test func editWinsOverDoubleTapAndCommandCanJoinAnActiveHold() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.switchToEdit() == .switchToEdit)
+    #expect(gestures.optionUp(at: 800) == .finishEdit)
+    #expect(gestures.switchToEdit() == .none)
+
+    #expect(gestures.optionDown(at: 1_000, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 1_100) == .none)
+    #expect(gestures.optionDown(at: 1_250, commandDown: true) == .startEdit)
+    #expect(gestures.optionUp(at: 1_700) == .finishEdit)
+    #expect(gestures.mode == .idle)
+}
+
+@Test func selectionCaptureUsesAccessibilityThenClipboardFallback() {
+    #expect(EditSelection.capture(accessibility: " selected ", clipboard: "stale") == .init(text: "selected", copied: false))
+    #expect(EditSelection.capture(accessibility: nil, clipboard: " copied ") == .init(text: "copied", copied: true))
+    #expect(EditSelection.capture(accessibility: "", clipboard: "copied") == .init(text: "copied", copied: true))
+    #expect(EditSelection.capture(accessibility: nil, clipboard: nil) == .init(text: "", copied: false))
+}
+
+@Test func armedTapCaptureIsDiscardedBeforeEditStarts() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    var recording = true
+    #expect(gestures.optionUp(at: 90) == .none)
+    let effect = gestures.optionDown(at: 190, commandDown: true)
+    let transitions = CaptureTransitions.optionDown(effect, priorCaptureActive: recording)
+    #expect(transitions == [.dismissTap, .startEdit])
+    var phase = "listening"
+    for transition in transitions {
+        switch transition {
+        case .dismissTap:
+            recording = false
+            phase = "idle"
+        case .startEdit:
+            #expect(!recording)
+            recording = true
+            phase = "editing"
+        default:
+            Issue.record("unexpected transition")
+        }
+    }
+    #expect(recording && phase == "editing")
+    #expect(gestures.optionUp(at: 700) == .finishEdit)
+    #expect(CaptureTransitions.optionDown(.startEdit, priorCaptureActive: false) == [.startEdit])
+}
+
+@Test @MainActor func aPendingSelectionProbeResolvesBeforeTheReleaseIsClassified() async {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    var probeFinished = false
+    let pending = Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(25))
+        #expect(gestures.switchToEdit() == .switchToEdit)
+        probeFinished = true
+    }
+    var effect: CaptureGestures.Effect = .none
+    await CaptureTransitions.release(mode: gestures.mode, probe: pending, stillCurrent: { true }) {
+        #expect(probeFinished)
+        effect = gestures.optionUp(at: 700)
+    }
+    #expect(effect == .finishEdit)
+
+    var ordinary = CaptureGestures()
+    #expect(ordinary.optionDown(at: 0, commandDown: false) == .startHold)
+    let empty = Task { @MainActor () -> Void in
+        try? await Task.sleep(for: .milliseconds(25))
+    }
+    await CaptureTransitions.release(mode: ordinary.mode, probe: empty, stillCurrent: { true }) {
+        effect = ordinary.optionUp(at: 700)
+    }
+    #expect(effect == .finish) // Empty probe: ordinary dictation.
+
+    var stale = CaptureGestures()
+    #expect(stale.optionDown(at: 0, commandDown: false) == .startHold)
+    await CaptureTransitions.release(mode: stale.mode, probe: empty, stillCurrent: { false }) {
+        effect = stale.optionUp(at: 700)
+    }
+    #expect(stale.mode == .holding(downAt: 0))
+}
+
+@Test func editSelectionAndResultGatePaste() {
+    #expect(EditDecision.decide(selection: "  ", response: "new") == .noSelection)
+    #expect(EditDecision.decide(selection: "old", response: nil) == .failed)
+    #expect(EditDecision.decide(selection: "old", response: "   ") == .failed)
+    #expect(EditDecision.decide(selection: "old", response: " old \n") == .unchanged)
+    #expect(EditDecision.decide(selection: "old", response: " new ") == .replace("new"))
+    #expect(EditDecision.matchesSelection(" old ", expected: "old"))
+    #expect(!EditDecision.matchesSelection("different", expected: "old"))
+    #expect(!EditDecision.matchesSelection(nil, expected: "old"))
+}
+
 @Test func anEditReplyIsTheOutputText() {
     let body = #"{"output":[{"type":"message","content":[{"type":"output_text","text":"ship it"}]}]}"#
     #expect(EditPrompt.text(from: Data(body.utf8)) == "ship it")
