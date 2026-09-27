@@ -88,8 +88,8 @@ import Testing
 }
 
 @Test func selectionCaptureUsesAccessibilityThenClipboardFallback() {
-    #expect(EditSelection.capture(accessibility: " selected ", clipboard: "stale") == .init(text: "selected", copied: false))
-    #expect(EditSelection.capture(accessibility: nil, clipboard: " copied ") == .init(text: "copied", copied: true))
+    #expect(EditSelection.capture(accessibility: " selected ", clipboard: "stale") == .init(text: " selected ", copied: false))
+    #expect(EditSelection.capture(accessibility: nil, clipboard: " copied ") == .init(text: " copied ", copied: true))
     #expect(EditSelection.capture(accessibility: "", clipboard: "copied") == .init(text: "copied", copied: true))
     #expect(EditSelection.capture(accessibility: nil, clipboard: nil) == .init(text: "", copied: false))
 }
@@ -161,7 +161,8 @@ import Testing
     #expect(EditDecision.decide(selection: "old", response: "   ") == .failed)
     #expect(EditDecision.decide(selection: "old", response: " old \n") == .unchanged)
     #expect(EditDecision.decide(selection: "old", response: " new ") == .replace("new"))
-    #expect(EditDecision.matchesSelection(" old ", expected: "old"))
+    #expect(EditDecision.matchesSelection("old", expected: "old"))
+    #expect(!EditDecision.matchesSelection(" old ", expected: "old"))
     #expect(!EditDecision.matchesSelection("different", expected: "old"))
     #expect(!EditDecision.matchesSelection(nil, expected: "old"))
 }

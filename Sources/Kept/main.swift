@@ -93,12 +93,19 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--render-edit-
     exit(EditCardSnapshot.save(to: path, dark: dark, long: long) ? 0 : 1)
 }
 
-if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--probe-edit" {
+if CommandLine.arguments.count >= 2, ["--probe-edit", "--probe-edit-bad-key"].contains(CommandLine.arguments[1]) {
     let box = TranscribeBox()
+    let badKey = CommandLine.arguments[1] == "--probe-edit-bad-key"
     Task { @MainActor in
-        let result = await OpenCodeClient.edit(text: "Ship it tomorrow.", instruction: "Change tomorrow to Friday.")
-        FileHandle.standardOutput.write(Data("edit_probe_response_chars \(result?.count ?? 0)\nedit_probe_matches_expected \(result == "Ship it Friday.")\n".utf8))
-        box.code = result == "Ship it Friday." ? 0 : 1
+        var proposed = ""
+        let result = await OpenCodeClient.edit(
+            text: "Ship it tomorrow.", instruction: "Change tomorrow to Friday.",
+            key: badKey ? "invalid-probe-key" : OpenCodeKey.load(),
+            matchesTarget: { true }, paste: { proposed = $0; return true }
+        )
+        let notice = result.notice
+        FileHandle.standardOutput.write(Data("edit_probe_outcome \(result)\nedit_probe_proposed \(proposed)\nedit_probe_notice \(notice.map { "\($0.title): \($0.body)" } ?? "none")\n".utf8))
+        box.code = badKey ? (result == .unauthorized ? 0 : 1) : (result == .applied && proposed == "Ship it Friday." ? 0 : 1)
         box.complete = true
     }
     while !box.complete {

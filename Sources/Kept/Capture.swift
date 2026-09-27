@@ -9,6 +9,7 @@ enum LivePhase: Equatable {
     case listening
     case locked
     case editing
+    case requestingEdit
     case notice
     case transcribing
     case cleaning
@@ -54,6 +55,8 @@ final class Session {
     @ObservationIgnored private var locked = false
     @ObservationIgnored private var editSelection = ""
     @ObservationIgnored private var editSelectionCopied = false
+    @ObservationIgnored private var editTarget: FocusedField.SelectionRead?
+    @ObservationIgnored private var editTask: Task<Void, Never>?
     @ObservationIgnored private var copyTask: Task<Void, Never>?
     @ObservationIgnored private var selectionProbe: Task<Void, Never>?
     @ObservationIgnored private var keyEvents: Task<Void, Never>?
@@ -135,8 +138,8 @@ final class Session {
         if read.text == nil, !commandDown, effect == .startHold {
             let generation = holdGeneration
             selectionProbe = Task { @MainActor [weak self] in
-                let copied = await FocusedAppPaste.copySelection()?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                guard let self, !Task.isCancelled, !copied.isEmpty, self.held, self.holdGeneration == generation else { return }
+                let copied = await FocusedAppPaste.copySelection() ?? ""
+                guard let self, !Task.isCancelled, !copied.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, self.held, self.holdGeneration == generation else { return }
                 let change = self.gestures.switchToEdit()
                 guard change == .switchToEdit else { return }
                 self.beginEdit(copied: copied, reuseHold: true)
@@ -203,6 +206,8 @@ final class Session {
     }
 
     private func beginEdit(copied: String? = nil, reuseHold: Bool) {
+        editTask?.cancel()
+        editTask = nil
         let priorProbe = selectionProbe
         selectionProbe?.cancel()
         selectionProbe = nil
@@ -213,6 +218,7 @@ final class Session {
         }
         let read = FocusedField.selectionRead()
         let selection = EditSelection.capture(accessibility: read.text, clipboard: copied)
+        editTarget = read
         copyTask?.cancel()
         copyTask = nil
         editSelection = selection.text
@@ -277,7 +283,7 @@ final class Session {
         status = title
         noticeTask?.cancel()
         noticeTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(6))
+            do { try await Task.sleep(for: .seconds(6)) } catch { return }
             guard let self, self.livePhase == .notice else { return }
             self.clearListening()
             self.status = self.idleStatus()
@@ -285,6 +291,9 @@ final class Session {
     }
 
     func beginHold() {
+        noticeTask?.cancel()
+        editTask?.cancel()
+        editTask = nil
         held = true
         guard !recording else { return }
         holdGeneration += 1
@@ -356,8 +365,9 @@ final class Session {
         guard recording, let wav = activeWav else {
             let copying = copyTask
             let generation = holdGeneration
-            Task {
+            editTask = Task {
                 await copying?.value
+                guard !Task.isCancelled else { return }
                 self.showMissingEditInput(generation: generation)
             }
             return
@@ -372,20 +382,25 @@ final class Session {
             try? FileManager.default.removeItem(at: wav)
             let copying = copyTask
             let generation = holdGeneration
-            Task {
+            editTask = Task {
                 await copying?.value
+                guard !Task.isCancelled else { return }
                 self.showMissingEditInput(generation: generation)
             }
             return
         }
         busy = true
-        status = "Editing…"
+        status = "Transcribing edit…"
         livePhase = .transcribing
         let copying = copyTask
-        finishTask = Task {
+        let generation = holdGeneration
+        let task = Task {
+            defer { if self.holdGeneration == generation { self.editTask = nil } }
             await copying?.value
+            guard !Task.isCancelled, self.holdGeneration == generation else { return }
             let selected = self.editSelection
             let copied = self.editSelectionCopied
+            let target = self.editTarget
             guard !selected.isEmpty else {
                 try? FileManager.default.removeItem(at: wav)
                 self.showNotice("Select text", "Select the text you want to change first.")
@@ -396,67 +411,52 @@ final class Session {
                 instruction = try await self.transcribe(wav)
             } catch {
                 try? FileManager.default.removeItem(at: wav)
-                self.showNotice("Didn't catch that", "Try the change again.")
+                guard !Task.isCancelled, self.holdGeneration == generation else { return }
+                self.showNotice("Didn't catch that", "Speak clearly and retry the edit.")
                 return
             }
             try? FileManager.default.removeItem(at: wav)
+            guard !Task.isCancelled, self.holdGeneration == generation else { return }
             KeptLog.edit.notice("edit instruction: \(duration, format: .fixed(precision: 1))s audio, \(instruction.split(separator: " ").count) words, selection \(selected.count) chars\(copied ? " (copied)" : "", privacy: .public)")
-            let edited = await OpenCodeClient.edit(text: selected, instruction: instruction)
-            switch EditDecision.decide(selection: selected, response: edited) {
-            case .noSelection:
-                self.showNotice("Select text", "Select the text you want to change first.")
-            case .failed:
-                self.showNotice(
-                    OpenCodeKey.load() == nil ? "No OpenCode key" : "Edit failed",
-                    OpenCodeKey.load() == nil ? "Save one in Settings." : "The model did not return a change."
-                )
-            case .unchanged:
-                KeptLog.edit.notice("edit returned the selection unchanged")
-                self.showNotice("No change", "The model returned the same text. Say the change again.")
-            case .replace(let replacement):
-                await self.replaceEdited(replacement, previous: selected, copied: copied)
+            self.liveCommitted = instruction
+            self.liveTail = ""
+            self.status = "Requesting edit…"
+            self.livePhase = .requestingEdit
+            let result = await OpenCodeClient.edit(text: selected, instruction: instruction, key: OpenCodeKey.load(), matchesTarget: {
+                guard let target, FocusedField.sameTarget(as: target) else { return false }
+                let read = FocusedField.selectionRead()
+                let current: String?
+                if let text = read.text, !text.isEmpty {
+                    current = text
+                } else if copied {
+                    current = await FocusedAppPaste.copySelection()
+                } else {
+                    current = nil
+                }
+                return FocusedField.sameTarget(as: target) && EditDecision.matchesSelection(current, expected: selected)
+            }, paste: { replacement in
+                guard !Task.isCancelled, self.holdGeneration == generation else { return false }
+                let pasted = FocusedAppPaste.paste(replacement)
+                KeptLog.edit.notice("replace: \(String(describing: pasted), privacy: .public)")
+                guard pasted == .pasted else { return false }
+                self.lastInsertedText = replacement
+                self.lastInsertLocation = nil
+                self.lastInsertLength = 0
+                let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
+                try? replacement.write(to: url, atomically: true, encoding: .utf8)
+                return true
+            })
+            guard !Task.isCancelled, self.holdGeneration == generation else { return }
+            if let notice = result.notice {
+                self.showNotice(notice.title, notice.body)
+            } else if result == .applied {
+                self.busy = false
+                self.clearListening()
+                self.status = self.idleStatus()
             }
         }
-    }
-
-    private func replaceEdited(_ edited: String, previous: String, copied: Bool) async {
-        let replacement = edited.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !replacement.isEmpty else {
-            showNotice("Edit failed", "The model did not return a change.")
-            return
-        }
-        await FocusedAppPaste.focusForeignAppIfNeeded()
-        let read = FocusedField.selectionRead()
-        let current: String?
-        if let text = read.text {
-            current = text
-        } else if copied {
-            current = await FocusedAppPaste.copySelection()
-        } else {
-            current = nil
-        }
-        guard EditDecision.matchesSelection(current, expected: previous) else {
-            KeptLog.edit.error("selection changed before replace: app \(read.app, privacy: .public), \(read.outcome, privacy: .public), expected \(previous.count) chars")
-            showNotice("Selection changed", "Select that text again.")
-            return
-        }
-        let pasted = FocusedAppPaste.paste(replacement)
-        KeptLog.edit.notice("replace in \(read.app, privacy: .public): \(String(describing: pasted), privacy: .public)")
-        switch pasted {
-        case .pasted:
-            lastInsertedText = replacement
-            lastInsertLocation = nil
-            lastInsertLength = 0
-            let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
-            try? replacement.write(to: url, atomically: true, encoding: .utf8)
-            busy = false
-            clearListening()
-            status = idleStatus()
-        case .accessibilityMissing:
-            showNotice("Can't insert", Self.insertNeedsAccessibility)
-        case .failed:
-            showNotice("Didn't paste", "The edit was not inserted.")
-        }
+        editTask = task
+        finishTask = task
     }
 
     func dismiss(_ id: UUID) {
@@ -505,8 +505,9 @@ final class Session {
             status = idleStatus()
             return
         }
-        guard held || recording || arming || livePhase == .listening || livePhase == .locked || livePhase == .editing else { return }
-        abandon("Hold cancelled.")
+        let wasEditing = editTask != nil || editing
+        guard held || recording || arming || wasEditing || livePhase == .listening || livePhase == .locked else { return }
+        abandon(wasEditing ? "Edit cancelled." : "Hold cancelled.")
     }
 
     private func noteRouteChange() {
@@ -517,6 +518,10 @@ final class Session {
     }
 
     private func abandon(_ message: String) {
+        editTask?.cancel()
+        editTask = nil
+        copyTask?.cancel()
+        selectionProbe?.cancel()
         gestures.cancel()
         locked = false
         editing = false
@@ -613,8 +618,13 @@ final class Session {
         arming = true
         defer { arming = false }
         guard await mic.granted() else {
-            status = "Microphone permission is off"
-            clearListening()
+            if editing {
+                abandon("Edit cancelled.")
+                showNotice("Microphone off", "Allow microphone access in System Settings, then retry the edit.")
+            } else {
+                status = "Microphone permission is off"
+                clearListening()
+            }
             return
         }
         guard held, generation == holdGeneration, !recording else {
@@ -636,8 +646,13 @@ final class Session {
             }
         } catch {
             if generation == holdGeneration {
-                status = "Could not start the microphone"
-                clearListening()
+                if editing {
+                    abandon("Edit cancelled.")
+                    showNotice("Microphone unavailable", "Check the selected input in Settings, then retry the edit.")
+                } else {
+                    status = "Could not start the microphone"
+                    clearListening()
+                }
             }
             return
         }

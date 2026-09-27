@@ -160,10 +160,11 @@ public struct EditSelection: Equatable, Sendable {
     public let copied: Bool
 
     public static func capture(accessibility: String?, clipboard: String? = nil) -> Self {
-        let ax = accessibility?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !ax.isEmpty { return Self(text: ax, copied: false) }
-        let fallback = clipboard?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return Self(text: fallback, copied: !fallback.isEmpty)
+        let ax = accessibility ?? ""
+        if !ax.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return Self(text: ax, copied: false) }
+        let fallback = clipboard ?? ""
+        let hasText = !fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return Self(text: hasText ? fallback : "", copied: hasText)
     }
 }
 
@@ -182,7 +183,7 @@ public enum EditDecision: Equatable, Sendable {
     }
 
     public static func matchesSelection(_ current: String?, expected: String) -> Bool {
-        current?.trimmingCharacters(in: .whitespacesAndNewlines) == expected
+        current == expected
     }
 }
 
