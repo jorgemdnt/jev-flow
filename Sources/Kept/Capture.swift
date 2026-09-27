@@ -427,7 +427,7 @@ final class Session {
     }
 
     private func abandon(_ message: String) {
-        gestures = CaptureGestures()
+        gestures.cancel()
         locked = false
         editing = false
         armTask?.cancel()

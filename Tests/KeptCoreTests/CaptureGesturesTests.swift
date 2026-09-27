@@ -73,6 +73,36 @@ import Testing
     #expect(gestures.optionUp(at: 2_000) == .none)
 }
 
+@Test func endingALockedTakeAfterFortyFiveSecondsDoesNotPasteOnTheNextKeyUp() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 90) == .none)
+    #expect(gestures.optionDown(at: 200, commandDown: false) == .startLock)
+    #expect(gestures.optionUp(at: 260) == .none)
+    #expect(!HoldWatch.insertAfterSilence(silentFor: .seconds(44)))
+    #expect(HoldWatch.insertAfterSilence(silentFor: .seconds(45)))
+    gestures.endedWithoutKey()
+    #expect(gestures.optionUp(at: 46_000) == .none)
+    #expect(gestures.optionDown(at: 47_000, commandDown: false) == .startHold)
+}
+
+@Test func cancellationAndInputChangeAbandonTheTakeRatherThanPasting() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    gestures.cancel()
+    #expect(gestures.optionUp(at: 900) == .none)
+    #expect(gestures.mode == .idle)
+    var locked = CaptureGestures()
+    #expect(locked.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(locked.optionUp(at: 80) == .none)
+    #expect(locked.optionDown(at: 200, commandDown: false) == .startLock)
+    #expect(locked.optionUp(at: 300) == .none)
+    #expect(HoldWatch.shouldAbandon(holding: true, routeChanged: true))
+    locked.cancel()
+    #expect(locked.optionUp(at: 1000) == .none)
+    #expect(locked.optionDown(at: 1200, commandDown: false) == .startHold)
+}
+
 @Test func anEditReplyIsTheOutputText() {
     let body = #"{"output":[{"type":"message","content":[{"type":"output_text","text":"ship it"}]}]}"#
     #expect(EditPrompt.text(from: Data(body.utf8)) == "ship it")

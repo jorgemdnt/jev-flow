@@ -45,6 +45,13 @@ import Testing
     #expect(SpeechRoute.engine(for: "hi") == .whisperCLI)
 }
 
+@Test func autoWhisperArgumentIsExplicitAndTimestampsRemainEnabled() {
+    let args = WhisperCommand.arguments(modelPath: "/model", wavPath: "/take.wav")
+    #expect(argument("--language", in: args) == "auto")
+    #expect(!args.contains("--no-timestamps"))
+    #expect(!args.contains("--detect-language"))
+}
+
 @Test func parakeetWordTimingsKeepTheTailAndDoNotSendOnANewline() {
     let text = SpeechTranscript.text(
         timedWords: [
