@@ -36,6 +36,22 @@ import Testing
     #expect(gestures.optionDown(at: 80 + CaptureGestures.gap + 1, commandDown: false) == .startHoldAfterTap)
 }
 
+@Test func aSelectionAfterAShortTapStartsAnEditNotALock() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 80) == .none)
+    #expect(gestures.optionDown(at: 200, commandDown: false, selection: true) == .startEditAfterTap)
+    #expect(gestures.optionUp(at: 800) == .finishEdit)
+}
+
+@Test func rightCommandAfterAShortTapIsAlsoAnEdit() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 80) == .none)
+    #expect(gestures.optionDown(at: 200, commandDown: true) == .startEditAfterTap)
+    #expect(gestures.optionUp(at: 800) == .finishEdit)
+}
+
 @Test func rightCommandWithRightOptionEdits() {
     var gestures = CaptureGestures()
     #expect(gestures.optionDown(at: 0, commandDown: true) == .startEdit)

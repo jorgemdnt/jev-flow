@@ -18,6 +18,7 @@ public struct CaptureGestures: Equatable, Sendable {
         case startHold
         case startLock
         case startEdit
+        case startEditAfterTap
         case finish
         case dismissTap
         case finishEdit
@@ -41,6 +42,10 @@ public struct CaptureGestures: Equatable, Sendable {
         case .editing, .holding:
             return .none
         case .armed(let upAt):
+            if commandDown || selection {
+                mode = .editing
+                return .startEditAfterTap
+            }
             if ms - upAt > Self.gap {
                 mode = .holding(downAt: ms)
                 return .startHoldAfterTap

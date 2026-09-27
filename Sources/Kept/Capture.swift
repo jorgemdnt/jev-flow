@@ -142,7 +142,8 @@ final class Session {
             locked = true
             livePhase = .locked
             status = "Tap Right Option to stop"
-        case .startEdit:
+        case .startEdit, .startEditAfterTap:
+            if effect == .startEditAfterTap { dismissTap() }
             guard OpenCodeKey.load() != nil else {
                 gestures = CaptureGestures()
                 showNotice("No OpenCode key", "Save one in Settings.")
