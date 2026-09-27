@@ -57,6 +57,38 @@ import Testing
     #expect(gestures.optionUp(at: 2_000) == .none)
 }
 
+@Test func editWinsOverDoubleTapAndCommandCanJoinAnActiveHold() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.switchToEdit() == .switchToEdit)
+    #expect(gestures.optionUp(at: 800) == .finishEdit)
+    #expect(gestures.switchToEdit() == .none)
+
+    #expect(gestures.optionDown(at: 1_000, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 1_100) == .none)
+    #expect(gestures.optionDown(at: 1_250, commandDown: true) == .startEdit)
+    #expect(gestures.optionUp(at: 1_700) == .finishEdit)
+    #expect(gestures.mode == .idle)
+}
+
+@Test func selectionCaptureUsesAccessibilityThenClipboardFallback() {
+    #expect(EditSelection.capture(accessibility: " selected ", clipboard: "stale") == .init(text: "selected", copied: false))
+    #expect(EditSelection.capture(accessibility: nil, clipboard: " copied ") == .init(text: "copied", copied: true))
+    #expect(EditSelection.capture(accessibility: "", clipboard: "copied") == .init(text: "copied", copied: true))
+    #expect(EditSelection.capture(accessibility: nil, clipboard: nil) == .init(text: "", copied: false))
+}
+
+@Test func editSelectionAndResultGatePaste() {
+    #expect(EditDecision.decide(selection: "  ", response: "new") == .noSelection)
+    #expect(EditDecision.decide(selection: "old", response: nil) == .failed)
+    #expect(EditDecision.decide(selection: "old", response: "   ") == .failed)
+    #expect(EditDecision.decide(selection: "old", response: " old \n") == .unchanged)
+    #expect(EditDecision.decide(selection: "old", response: " new ") == .replace("new"))
+    #expect(EditDecision.matchesSelection(" old ", expected: "old"))
+    #expect(!EditDecision.matchesSelection("different", expected: "old"))
+    #expect(!EditDecision.matchesSelection(nil, expected: "old"))
+}
+
 @Test func anEditReplyIsTheOutputText() {
     let body = #"{"output":[{"type":"message","content":[{"type":"output_text","text":"ship it"}]}]}"#
     #expect(EditPrompt.text(from: Data(body.utf8)) == "ship it")

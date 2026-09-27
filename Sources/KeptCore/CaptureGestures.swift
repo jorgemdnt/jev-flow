@@ -18,6 +18,7 @@ public struct CaptureGestures: Equatable, Sendable {
         case startHold
         case startLock
         case startEdit
+        case switchToEdit
         case finish
         case dismissTap
         case finishEdit
@@ -41,6 +42,10 @@ public struct CaptureGestures: Equatable, Sendable {
         case .editing, .holding:
             return .none
         case .armed(let upAt):
+            if commandDown || selection {
+                mode = .editing
+                return .startEdit
+            }
             if ms - upAt > Self.gap {
                 mode = .holding(downAt: ms)
                 return .startHoldAfterTap
@@ -55,6 +60,14 @@ public struct CaptureGestures: Equatable, Sendable {
             mode = .holding(downAt: ms)
             return .startHold
         }
+    }
+
+    /// Right Command pressed after Right Option (or a selection discovered by copy).
+    /// Keep the current microphone hold; only its release behavior changes.
+    public mutating func switchToEdit() -> Effect {
+        guard case .holding = mode else { return .none }
+        mode = .editing
+        return .switchToEdit
     }
 
     public mutating func optionUp(at ms: Int) -> Effect {
@@ -104,6 +117,38 @@ public enum HoldKeyCommand {
             return (flags & rightCommandDeviceBit) != 0
         }
         return (flags & commandBit) != 0
+    }
+}
+
+/// Prefer Accessibility, then the clipboard fallback used for Electron fields.
+public struct EditSelection: Equatable, Sendable {
+    public let text: String
+    public let copied: Bool
+
+    public static func capture(accessibility: String?, clipboard: String? = nil) -> Self {
+        let ax = accessibility?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !ax.isEmpty { return Self(text: ax, copied: false) }
+        let fallback = clipboard?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return Self(text: fallback, copied: !fallback.isEmpty)
+    }
+}
+
+/// Classifies the model result before any paste. An absent selection never calls the model.
+public enum EditDecision: Equatable, Sendable {
+    case noSelection
+    case failed
+    case unchanged
+    case replace(String)
+
+    public static func decide(selection: String, response: String?) -> Self {
+        let selected = selection.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty else { return .noSelection }
+        guard let edited = response?.trimmingCharacters(in: .whitespacesAndNewlines), !edited.isEmpty else { return .failed }
+        return edited == selected ? .unchanged : .replace(edited)
+    }
+
+    public static func matchesSelection(_ current: String?, expected: String) -> Bool {
+        current?.trimmingCharacters(in: .whitespacesAndNewlines) == expected
     }
 }
 
