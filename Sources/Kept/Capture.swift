@@ -56,6 +56,8 @@ final class Session {
     @ObservationIgnored private var editSelectionCopied = false
     @ObservationIgnored private var copyTask: Task<Void, Never>?
     @ObservationIgnored private var selectionProbe: Task<Void, Never>?
+    @ObservationIgnored private var keyEvents: Task<Void, Never>?
+    @ObservationIgnored private var startTask: Task<Void, Never>?
     @ObservationIgnored private var lastInsertLocation: Int?
     @ObservationIgnored private var lastInsertLength = 0
     var caretNote = ""
@@ -72,17 +74,20 @@ final class Session {
         try? FileManager.default.createDirectory(at: KeptPaths.modelsDirectory, withIntermediateDirectories: true)
         monitor.onDown = { [weak self] commandDown in
             let at = Session.milliseconds()
-            Task { @MainActor in self?.optionDown(commandDown, at: at) }
+            Task { @MainActor [weak self] in
+                self?.queueKeyEvent { session in session.optionDown(commandDown, at: at) }
+            }
         }
         monitor.onCommandDown = { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.apply(self.gestures.switchToEdit())
+            Task { @MainActor [weak self] in
+                self?.queueKeyEvent { session in session.apply(session.gestures.switchToEdit()) }
             }
         }
         monitor.onUp = { [weak self] in
             let at = Session.milliseconds()
-            Task { @MainActor in self?.optionUp(at: at) }
+            Task { @MainActor [weak self] in
+                self?.queueKeyEvent { session in await session.optionUp(at: at) }
+            }
         }
         monitor.onCancel = { [weak self] in
             Task { @MainActor in self?.cancelHold() }
@@ -104,6 +109,15 @@ final class Session {
         }
     }
 
+    private func queueKeyEvent(_ action: @escaping @MainActor (Session) async -> Void) {
+        let previous = keyEvents
+        keyEvents = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            await action(self)
+        }
+    }
+
     private static func milliseconds() -> Int {
         Int(Date().timeIntervalSince1970 * 1000)
     }
@@ -114,7 +128,9 @@ final class Session {
         let selected = read.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
         let effect = gestures.optionDown(at: ms, commandDown: commandDown, selection: selected)
         KeptLog.edit.notice("option down: app \(read.app, privacy: .public), selection \(read.outcome, privacy: .public), right command \(commandDown), effect \(String(describing: effect), privacy: .public)")
-        apply(effect)
+        for transition in CaptureTransitions.optionDown(effect, priorCaptureActive: held || recording || arming) {
+            apply(transition)
+        }
         if read.text == nil, !commandDown, effect == .startHold {
             let generation = holdGeneration
             selectionProbe = Task { @MainActor [weak self] in
@@ -127,7 +143,17 @@ final class Session {
         }
     }
 
-    private func optionUp(at ms: Int) {
+    private func optionUp(at ms: Int) async {
+        let generation = holdGeneration
+        await CaptureTransitions.release(
+            mode: gestures.mode,
+            probe: selectionProbe,
+            stillCurrent: { [weak self] in self?.held == true && self?.holdGeneration == generation },
+            finish: { [weak self] in self?.finishOptionUp(at: ms) }
+        )
+    }
+
+    private func finishOptionUp(at ms: Int) {
         let effect = gestures.optionUp(at: ms)
         apply(effect)
         if case .armed = gestures.mode {
@@ -268,7 +294,11 @@ final class Session {
         status = editing ? "Say the change" : "Recording…"
         watchTask?.cancel()
         watchTask = Task { await self.watchHold(generation) }
-        Task { await startRecordingIfStillHeld(generation) }
+        let priorStart = startTask
+        startTask = Task {
+            await priorStart?.value
+            await startRecordingIfStillHeld(generation)
+        }
     }
 
     func endHold() {
@@ -600,7 +630,7 @@ final class Session {
             guard held, generation == holdGeneration else {
                 _ = mic.stop()
                 try? FileManager.default.removeItem(at: wav)
-                clearListening()
+                if generation == holdGeneration { clearListening() }
                 return
             }
         } catch {
@@ -613,7 +643,7 @@ final class Session {
         guard held, generation == holdGeneration else {
             _ = mic.stop()
             try? FileManager.default.removeItem(at: wav)
-            clearListening()
+            if generation == holdGeneration { clearListening() }
             return
         }
         activeID = id
@@ -678,7 +708,11 @@ final class Session {
                 holdGeneration += 1
                 let generation = holdGeneration
                 watchTask = Task { await self.watchHold(generation) }
-                Task { await startRecordingIfStillHeld(generation) }
+                let priorStart = startTask
+                startTask = Task {
+                    await priorStart?.value
+                    await startRecordingIfStillHeld(generation)
+                }
             } else if !monitor.isDown {
                 held = false
             }

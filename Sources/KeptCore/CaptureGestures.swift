@@ -107,6 +107,35 @@ public struct CaptureGestures: Equatable, Sendable {
     }
 }
 
+/// An armed tap may still own a microphone take. Discard it before starting
+/// the edit, while keeping the gesture's `.editing` mode for key-up.
+public enum CaptureTransitions {
+    public static func optionDown(_ effect: CaptureGestures.Effect, priorCaptureActive: Bool) -> [CaptureGestures.Effect] {
+        if effect == .startEdit, priorCaptureActive {
+            return [.dismissTap, .startEdit]
+        }
+        return [effect]
+    }
+
+    public static func waitsForSelection(_ mode: CaptureGestures.Mode, probePending: Bool) -> Bool {
+        if case .holding = mode { return probePending }
+        return false
+    }
+
+    @MainActor public static func release(
+        mode: CaptureGestures.Mode,
+        probe: Task<Void, Never>?,
+        stillCurrent: @MainActor () -> Bool,
+        finish: @MainActor () -> Void
+    ) async {
+        if waitsForSelection(mode, probePending: probe != nil) {
+            await probe?.value
+            guard stillCurrent() else { return }
+        }
+        finish()
+    }
+}
+
 public enum HoldKeyCommand {
     public static let rightCommandDeviceBit: UInt64 = 0x10
     public static let commandBit: UInt64 = 0x0010_0000

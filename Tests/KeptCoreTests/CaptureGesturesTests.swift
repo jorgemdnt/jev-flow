@@ -78,6 +78,67 @@ import Testing
     #expect(EditSelection.capture(accessibility: nil, clipboard: nil) == .init(text: "", copied: false))
 }
 
+@Test func armedTapCaptureIsDiscardedBeforeEditStarts() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    var recording = true
+    #expect(gestures.optionUp(at: 90) == .none)
+    let effect = gestures.optionDown(at: 190, commandDown: true)
+    let transitions = CaptureTransitions.optionDown(effect, priorCaptureActive: recording)
+    #expect(transitions == [.dismissTap, .startEdit])
+    var phase = "listening"
+    for transition in transitions {
+        switch transition {
+        case .dismissTap:
+            recording = false
+            phase = "idle"
+        case .startEdit:
+            #expect(!recording)
+            recording = true
+            phase = "editing"
+        default:
+            Issue.record("unexpected transition")
+        }
+    }
+    #expect(recording && phase == "editing")
+    #expect(gestures.optionUp(at: 700) == .finishEdit)
+    #expect(CaptureTransitions.optionDown(.startEdit, priorCaptureActive: false) == [.startEdit])
+}
+
+@Test @MainActor func aPendingSelectionProbeResolvesBeforeTheReleaseIsClassified() async {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    var probeFinished = false
+    let pending = Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(25))
+        #expect(gestures.switchToEdit() == .switchToEdit)
+        probeFinished = true
+    }
+    var effect: CaptureGestures.Effect = .none
+    await CaptureTransitions.release(mode: gestures.mode, probe: pending, stillCurrent: { true }) {
+        #expect(probeFinished)
+        effect = gestures.optionUp(at: 700)
+    }
+    #expect(effect == .finishEdit)
+
+    var ordinary = CaptureGestures()
+    #expect(ordinary.optionDown(at: 0, commandDown: false) == .startHold)
+    let empty = Task { @MainActor () -> Void in
+        try? await Task.sleep(for: .milliseconds(25))
+    }
+    await CaptureTransitions.release(mode: ordinary.mode, probe: empty, stillCurrent: { true }) {
+        effect = ordinary.optionUp(at: 700)
+    }
+    #expect(effect == .finish) // Empty probe: ordinary dictation.
+
+    var stale = CaptureGestures()
+    #expect(stale.optionDown(at: 0, commandDown: false) == .startHold)
+    await CaptureTransitions.release(mode: stale.mode, probe: empty, stillCurrent: { false }) {
+        effect = stale.optionUp(at: 700)
+    }
+    #expect(stale.mode == .holding(downAt: 0))
+}
+
 @Test func editSelectionAndResultGatePaste() {
     #expect(EditDecision.decide(selection: "  ", response: "new") == .noSelection)
     #expect(EditDecision.decide(selection: "old", response: nil) == .failed)
