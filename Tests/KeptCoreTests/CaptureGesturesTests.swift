@@ -36,6 +36,22 @@ import Testing
     #expect(gestures.optionDown(at: 80 + CaptureGestures.gap + 1, commandDown: false) == .startHoldAfterTap)
 }
 
+@Test func aSelectionAfterAShortTapStartsAnEditNotALock() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 80) == .none)
+    #expect(gestures.optionDown(at: 200, commandDown: false, selection: true) == .startEdit)
+    #expect(gestures.optionUp(at: 800) == .finishEdit)
+}
+
+@Test func rightCommandAfterAShortTapIsAlsoAnEdit() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 80) == .none)
+    #expect(gestures.optionDown(at: 200, commandDown: true) == .startEdit)
+    #expect(gestures.optionUp(at: 800) == .finishEdit)
+}
+
 @Test func rightCommandWithRightOptionEdits() {
     var gestures = CaptureGestures()
     #expect(gestures.optionDown(at: 0, commandDown: true) == .startEdit)
@@ -148,6 +164,35 @@ import Testing
     #expect(EditDecision.matchesSelection(" old ", expected: "old"))
     #expect(!EditDecision.matchesSelection("different", expected: "old"))
     #expect(!EditDecision.matchesSelection(nil, expected: "old"))
+}
+@Test func endingALockedTakeAfterFortyFiveSecondsDoesNotPasteOnTheNextKeyUp() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(gestures.optionUp(at: 90) == .none)
+    #expect(gestures.optionDown(at: 200, commandDown: false) == .startLock)
+    #expect(gestures.optionUp(at: 260) == .none)
+    #expect(!HoldWatch.insertAfterSilence(silentFor: .seconds(44)))
+    #expect(HoldWatch.insertAfterSilence(silentFor: .seconds(45)))
+    gestures.endedWithoutKey()
+    #expect(gestures.optionUp(at: 46_000) == .none)
+    #expect(gestures.optionDown(at: 47_000, commandDown: false) == .startHold)
+}
+
+@Test func cancellationAndInputChangeAbandonTheTakeRatherThanPasting() {
+    var gestures = CaptureGestures()
+    #expect(gestures.optionDown(at: 0, commandDown: false) == .startHold)
+    gestures.cancel()
+    #expect(gestures.optionUp(at: 900) == .none)
+    #expect(gestures.mode == .idle)
+    var locked = CaptureGestures()
+    #expect(locked.optionDown(at: 0, commandDown: false) == .startHold)
+    #expect(locked.optionUp(at: 80) == .none)
+    #expect(locked.optionDown(at: 200, commandDown: false) == .startLock)
+    #expect(locked.optionUp(at: 300) == .none)
+    #expect(HoldWatch.shouldAbandon(holding: true, routeChanged: true))
+    locked.cancel()
+    #expect(locked.optionUp(at: 1000) == .none)
+    #expect(locked.optionDown(at: 1200, commandDown: false) == .startHold)
 }
 
 @Test func anEditReplyIsTheOutputText() {

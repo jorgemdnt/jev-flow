@@ -63,6 +63,20 @@ private final class PasteFunction {
     #expect(delivery == .pasted("But. "))
 }
 
+@Test func onlyAReadableNonWhitespaceCaretNeedsATypedLeadingSpace() {
+    #expect(TakeJoin.needsSeparator(previous: "Done. ", next: "Next.", field: .needsSpace))
+    #expect(!TakeJoin.needsSeparator(previous: "Done.", next: "Next.", field: .separated))
+    #expect(!TakeJoin.needsSeparator(previous: "Done.", next: "Next.", field: .unknown))
+    #expect(!TakeJoin.needsSeparator(previous: "Done.", next: "", field: .needsSpace))
+    #expect(TakeJoin.submission(previous: "Done.", next: "Next.", field: .needsSpace) == "Next. ")
+}
+
+@Test func submissionNormalizesPastedWhitespaceToOneTrailingSpace() {
+    #expect(TakeJoin.submission(previous: "", next: "  Hello.  ") == "Hello. ")
+    #expect(TakeJoin.submission(previous: "", next: "\n• Milk\n• Eggs\n") == "• Milk\n• Eggs ")
+    #expect(TakeJoin.submission(previous: "", next: "   ") == "")
+}
+
 @Test func anUnreadFieldDoesNotStartWithASpace() {
     let paste = PasteFunction()
     let delivery = InsertPipeline.afterTake(

@@ -65,6 +65,22 @@ import Testing
     #expect(text.hasSuffix("."))
 }
 
+@Test func aThenChainAndRejectionStayProseWithAllWords() {
+    let text = SpeechFormat.render("can we not ship this, that, then review it", shape: .prose, replacements: [])
+    #expect(text == "Can we not ship this, that, then review it.")
+    #expect(!text.contains("•"))
+}
+
+@Test func aSpokenRejectionKeepsBothTheRejectedAndReplacementOptions() {
+    let text = SpeechFormat.render("not blue, green", shape: .prose, replacements: [])
+    #expect(text == "Not blue, green.")
+}
+
+@Test func aListWithoutSeparatorsSplitsEachWord() {
+    let text = SpeechFormat.render("list of banana pineapple", shape: .prose, replacements: [])
+    #expect(text == "List of\n• Banana\n• Pineapple")
+}
+
 @Test func aProductTermKeepsItsSpelling() {
     let text = SpeechFormat.render("ship the post hog change and the code rabbit review", shape: .prose, replacements: [], dictionary: ["PostHog", "CodeRabbit"])
     #expect(text.contains("PostHog"))

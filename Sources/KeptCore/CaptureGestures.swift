@@ -100,6 +100,11 @@ public struct CaptureGestures: Equatable, Sendable {
         }
     }
 
+    /// Escape, card and status-item cancellation all discard the pending gesture.
+    public mutating func cancel() {
+        mode = .idle
+    }
+
     public mutating func tick(at ms: Int) -> Effect {
         guard case .armed(let upAt) = mode, ms - upAt >= Self.gap else { return .none }
         mode = .idle
