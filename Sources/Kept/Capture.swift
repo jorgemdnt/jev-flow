@@ -66,10 +66,11 @@ final class Session {
     var noticeTitle = ""
     var noticeBody = ""
 
-    init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory)) {
+    init(store: TakeStore = TakeStore(directory: KeptPaths.takesDirectory), startCapture: Bool = true) {
         self.store = store
         takes = (try? store.load()) ?? []
         lastInsertedText = Self.readLastInserted() ?? takes.compactMap(\.insertedText).first ?? ""
+        guard startCapture else { return }
         try? FileManager.default.createDirectory(at: KeptPaths.takesDirectory, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: KeptPaths.modelsDirectory, withIntermediateDirectories: true)
         monitor.onDown = { [weak self] commandDown in

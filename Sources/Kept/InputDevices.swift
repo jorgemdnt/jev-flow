@@ -235,27 +235,27 @@ struct MicrophoneSettings: View {
     @Bindable var store: MicStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Microphone")
-                .font(.system(size: 13, weight: .semibold))
-            Text(caption)
-                .font(.system(size: 13))
-                .foregroundStyle(.secondary)
-            Picker("Microphone", selection: Binding(
-                get: { store.uid },
-                set: { store.choose($0) }
-            )) {
-                Text("System default").tag(InputDevices.system)
-                ForEach(store.devices) { device in
-                    Text(device.name).tag(device.id)
+        KeptCard {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Microphone")
+                    .font(KeptType.title)
+                Text(caption)
+                    .font(KeptType.secondary)
+                    .foregroundStyle(.secondary)
+                Picker("Microphone", selection: Binding(
+                    get: { store.uid },
+                    set: { store.choose($0) }
+                )) {
+                    Text("System default").tag(InputDevices.system)
+                    ForEach(store.devices) { device in
+                        Text(device.name).tag(device.id)
+                    }
                 }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .accessibilityLabel("Input microphone")
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onAppear { store.refresh() }
     }
 

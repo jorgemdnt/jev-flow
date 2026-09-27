@@ -34,6 +34,14 @@ struct KeptApp: App {
     }
 }
 
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--ui-snapshot" {
+    let directory = CommandLine.arguments[2]
+    let window = UISnapshot.save(in: directory)
+    let cards = LiveCardSnapshot.save(in: directory)
+    FileHandle.standardOutput.write(Data("window_snapshots \(window) card_snapshots \(cards)\n".utf8))
+    exit(window && cards ? 0 : 1)
+}
+
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--transcribe" {
     let path = CommandLine.arguments[2]
     let box = TranscribeBox()

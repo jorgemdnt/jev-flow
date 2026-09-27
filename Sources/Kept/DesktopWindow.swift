@@ -126,11 +126,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.setContentSize(NSSize(width: 860, height: 560))
-        window.backgroundColor = NSColor(name: nil, dynamicProvider: { appearance in
-            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                ? NSColor(calibratedWhite: 0.11, alpha: 1)
-                : NSColor(calibratedRed: 0.965, green: 0.957, blue: 0.945, alpha: 1)
-        })
+        window.backgroundColor = KeptColor.canvasNS
         window.isMovableByWindowBackground = true
         window.delegate = self
         window.isReleasedWhenClosed = false
@@ -426,9 +422,9 @@ private struct EditCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: 9) {
-                LucideMark(icon: .pencil, size: 15, color: .accentColor)
+                LucideMark(icon: .pencil, size: 15, color: KeptColor.accent)
                     .frame(width: 30, height: 30)
-                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                    .background(KeptColor.tint, in: RoundedRectangle(cornerRadius: 9))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Edit")
                         .font(.system(size: 14, weight: .semibold))
@@ -476,10 +472,10 @@ private struct EditCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: KeptTheme.radius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.65), lineWidth: 1.5)
+            RoundedRectangle(cornerRadius: KeptTheme.radius, style: .continuous)
+                .stroke(KeptColor.accent.opacity(0.65), lineWidth: 1.5)
         )
     }
 
@@ -510,20 +506,17 @@ private struct SpeechCard: View {
     @ObservedObject var model: LiveCardModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                LucideMark(icon: .option, size: 12, color: .secondary)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(model.phase == .locked ? KeptColor.accent : Color.red)
+                    .frame(width: 8, height: 8)
+                    .accessibilityHidden(true)
                 Text(caption)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 13, weight: .semibold))
                 Spacer(minLength: 8)
-                Text(mic)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Text(hint)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                LucideMark(icon: .option, size: 13, color: KeptColor.accent)
+                    .accessibilityHidden(true)
             }
             line
                 .font(.system(size: 15, weight: .medium))
@@ -532,15 +525,24 @@ private struct SpeechCard: View {
                 .clipped()
                 .animation(.easeOut(duration: 0.16), value: model.committed)
                 .animation(.easeOut(duration: 0.16), value: model.tail)
+            HStack(spacing: 6) {
+                Text(mic)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 6)
+                Text(hint)
+            }
+            .font(KeptType.caption)
+            .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-        )
+        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: KeptTheme.radius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: KeptTheme.radius, style: .continuous)
+                .strokeBorder(KeptColor.border)
+        }
     }
 
     private var line: Text {
@@ -609,6 +611,29 @@ enum EditCardSnapshot {
     }
 }
 
+@MainActor
+enum LiveCardSnapshot {
+    static func save(in directory: String) -> Bool {
+        _ = NSApplication.shared
+        let root = URL(fileURLWithPath: directory, isDirectory: true)
+        for dark in [false, true] {
+            let suffix = dark ? "dark" : "light"
+            let model = LiveCardModel()
+            model.update(committed: "Ship the update on Friday,", tail: "not Monday.", phase: .listening, mic: "MacBook Pro Microphone", subject: "", kind: "", noticeTitle: "", noticeBody: "")
+            let speech = LiveCardMetrics.speech("Ship the update on Friday, not Monday.")
+            guard UISnapshot.capture(LiveCard(model: model), size: speech, dark: dark, to: root.appendingPathComponent("listening-\(suffix).png")) else { return false }
+            model.update(committed: "The longer dictation line stays in the card while the microphone remains locked.", tail: "Keep speaking.", phase: .locked, mic: "MacBook Pro Microphone", subject: "", kind: "", noticeTitle: "", noticeBody: "")
+            let locked = LiveCardMetrics.speech("The longer dictation line stays in the card while the microphone remains locked. Keep speaking.")
+            guard UISnapshot.capture(LiveCard(model: model), size: locked, dark: dark, to: root.appendingPathComponent("locked-\(suffix).png")) else { return false }
+            model.update(committed: "", tail: "", phase: .notice, mic: "", subject: "", kind: "", noticeTitle: "Select text", noticeBody: "Select the text you want to change first.")
+            let notice = LiveCardMetrics.notice(title: "Select text", body: "Select the text you want to change first.")
+            guard UISnapshot.capture(LiveCard(model: model), size: notice, dark: dark, to: root.appendingPathComponent("notice-\(suffix).png")) else { return false }
+            guard EditCardSnapshot.save(to: root.appendingPathComponent("edit-\(suffix).png").path, dark: dark, long: false) else { return false }
+        }
+        return true
+    }
+}
+
 enum LiveCardMetrics {
     static let width: CGFloat = 320
     static let maxBody: CGFloat = 180
@@ -616,9 +641,9 @@ enum LiveCardMetrics {
     static func speech(_ text: String) -> NSSize {
         let font = NSFont.systemFont(ofSize: 15, weight: .medium)
         let sample = text.isEmpty ? "…" : text
-        let wrapped = box(sample, font: font, width: width - 24)
+        let wrapped = box(sample, font: font, width: width - 28)
         let body = min(maxBody, max(22, wrapped.height))
-        return NSSize(width: width, height: 44 + body)
+        return NSSize(width: width, height: 72 + body)
     }
 
     static func edit(selection: String, instruction: String) -> NSSize {

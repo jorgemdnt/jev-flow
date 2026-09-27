@@ -6,6 +6,7 @@ struct KeptWindow: View {
     let session: Session
     @Bindable var pages: KeptPages
     @Namespace private var selection
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
@@ -18,34 +19,52 @@ struct KeptWindow: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("JevFlow")
-                .font(.system(size: 13, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.bottom, 14)
-            nav("History", .clock, .history)
-            nav("Dictionary", .book, .dictionary)
-            nav("Settings", .settings, .settings)
-            Spacer()
-            HStack(spacing: 6) {
-                LucideMark(icon: .option, size: 14)
-                Text("Hold right")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                LucideMark(icon: .option, size: 18, color: KeptColor.onAccent)
+                    .frame(width: 34, height: 34)
+                    .background(KeptColor.accent, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityHidden(true)
+                Text("JevFlow")
+                    .font(.system(size: 17, weight: .semibold))
             }
-            .font(.system(size: 11))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 40)
+            KeptSectionLabel(text: "WORKSPACE")
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+            VStack(spacing: 4) {
+                nav("History", .clock, .history)
+                nav("Dictionary", .book, .dictionary)
+                nav("Settings", .settings, .settings)
+            }
+            Spacer(minLength: 24)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    LucideMark(icon: .option, size: 15, color: KeptColor.accent)
+                    Text("RIGHT OPTION")
+                        .font(KeptType.eyebrow)
+                        .tracking(0.8)
+                }
+                Text("Hold anywhere to dictate")
+                    .font(KeptType.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(KeptColor.card.opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .padding(.top, 42)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 16)
-        .frame(width: 196)
+        .padding(.horizontal, 14)
+        .padding(.bottom, 18)
+        .frame(width: 212)
         .background(KeptColor.rail)
+        .overlay(alignment: .trailing) { KeptColor.border.frame(width: 1) }
     }
 
     private var detail: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: KeptTheme.gutter) {
                 switch pages.page {
                 case .history:
                     HistoryPage(session: session)
@@ -55,15 +74,15 @@ struct KeptWindow: View {
                     SettingsPage()
                 }
             }
-            .frame(maxWidth: 640, alignment: .leading)
-            .padding(.horizontal, 36)
-            .padding(.top, 36)
-            .padding(.bottom, 28)
+            .frame(maxWidth: 680, alignment: .leading)
+            .padding(.horizontal, KeptTheme.margin)
+            .padding(.top, 48)
+            .padding(.bottom, 36)
             .frame(maxWidth: .infinity, alignment: .leading)
             .id(pages.page)
             .transition(.opacity.combined(with: .offset(y: 6)))
         }
-        .animation(.smooth(duration: 0.28), value: pages.page)
+        .animation(reduceMotion ? nil : KeptTheme.animation, value: pages.page)
     }
 
     private func nav(_ title: String, _ icon: LucideIcon, _ page: KeptPage) -> some View {
@@ -78,40 +97,43 @@ private struct NavRow: View {
     var pages: KeptPages
     var selection: Namespace.ID
     @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let selected = pages.page == page
         Button {
-            withAnimation(.snappy(duration: 0.22)) {
+            withAnimation(reduceMotion ? nil : KeptTheme.animation) {
                 pages.page = page
             }
         } label: {
-            HStack(spacing: 8) {
-                LucideMark(icon: icon, size: 16)
-                    .frame(width: 16, height: 16)
+            HStack(spacing: 10) {
+                LucideMark(icon: icon, size: 17, color: selected ? KeptColor.accent : .secondary)
+                    .frame(width: 20, height: 20)
+                    .accessibilityHidden(true)
                 Text(title)
                 Spacer(minLength: 0)
             }
-            .font(.system(size: 13, weight: selected ? .semibold : .regular))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
+            .font(.system(size: 13, weight: selected ? .semibold : .medium))
+            .foregroundStyle(selected ? KeptColor.accent : Color.primary)
+            .padding(.horizontal, 12)
+            .frame(height: 38)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .background {
                 if selected {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(KeptColor.selected)
                         .matchedGeometryEffect(id: "selection", in: selection)
                 } else if hovering {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.primary.opacity(0.04))
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(0.05))
                 }
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title)
         .onHover { inside in
-            withAnimation(.easeOut(duration: 0.15)) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
                 hovering = inside
             }
         }
@@ -122,40 +144,70 @@ private struct HistoryPage: View {
     let session: Session
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            KeptHeader(title: "History", subtitle: session.status)
-            if session.takes.isEmpty {
-                KeptCard {
-                    Text("No takes yet. Hold Right Option in any text field.")
+        VStack(alignment: .leading, spacing: KeptTheme.gutter) {
+            KeptHeader(eyebrow: "YOUR WORDS", title: "History", subtitle: "Your recent takes, ready when you need them.")
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(KeptColor.accent)
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Capture status")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(session.status)
+                        .font(KeptType.caption)
                         .foregroundStyle(.secondary)
                 }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(KeptColor.tint, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            if session.takes.isEmpty {
+                KeptCard {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Nothing here yet")
+                            .font(KeptType.title)
+                        Text("Hold Right Option in any text field. Your takes will appear here.")
+                            .font(KeptType.secondary)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             } else {
+                KeptSectionLabel(text: "RECENT TAKES")
+                    .padding(.top, 6)
                 ForEach(session.takes) { take in
                     KeptCard {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(take.insertedText ?? take.rawTranscript)
-                                .font(.system(size: 14))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            HStack {
-                                Text(String(format: "%.1f s", take.durationSeconds))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if take.insertedText != nil {
-                                    Button("Insert again") { session.insertAgain(take.id) }
-                                        .buttonStyle(KeptPrimaryButton())
-                                } else if session.refusesAutoInsert(take) {
-                                    Button("Insert raw") { session.insertRaw(take.id) }
-                                        .buttonStyle(KeptPrimaryButton())
-                                } else {
-                                    Button("Insert") { session.insertKept(take.id) }
-                                        .buttonStyle(KeptPrimaryButton())
+                        HStack(alignment: .top, spacing: 16) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(KeptColor.accent)
+                                .frame(width: 3, height: 28)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text(take.insertedText ?? take.rawTranscript)
+                                    .font(KeptType.body)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                HStack(spacing: 16) {
+                                    Text(String(format: "%.1f s", take.durationSeconds))
+                                        .font(KeptType.caption)
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                    Spacer(minLength: 8)
+                                    Button("Dismiss") { session.dismiss(take.id) }
+                                        .buttonStyle(.plain)
+                                        .font(KeptType.secondary)
+                                        .foregroundStyle(.secondary)
+                                    if take.insertedText != nil {
+                                        Button("Insert again") { session.insertAgain(take.id) }
+                                            .buttonStyle(KeptPrimaryButton())
+                                    } else if session.refusesAutoInsert(take) {
+                                        Button("Insert raw") { session.insertRaw(take.id) }
+                                            .buttonStyle(KeptPrimaryButton())
+                                    } else {
+                                        Button("Insert") { session.insertKept(take.id) }
+                                            .buttonStyle(KeptPrimaryButton())
+                                    }
                                 }
-                                Button("Dismiss") { session.dismiss(take.id) }
-                                    .buttonStyle(.plain)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
@@ -170,41 +222,58 @@ private struct DictionaryPage: View {
     @State private var draft = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: KeptTheme.gutter) {
             KeptHeader(
+                eyebrow: "MAKE IT YOURS",
                 title: "Dictionary",
                 subtitle: "Names and product terms. A unique name pastes as the @handle."
             )
-            HStack(spacing: 8) {
-                TextField("Add a word", text: $draft)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(KeptColor.card, in: Capsule())
-                    .onSubmit(add)
-                Button("Add", action: add)
-                    .buttonStyle(KeptPrimaryButton())
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            KeptCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Add a word")
+                        .font(KeptType.title)
+                    Text("Save the spelling you want to see in your text.")
+                        .font(KeptType.secondary)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        TextField("Word or @handle", text: $draft)
+                            .textFieldStyle(.plain)
+                            .font(KeptType.body)
+                            .padding(.horizontal, 12)
+                            .frame(height: 38)
+                            .background(KeptColor.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                            .accessibilityLabel("New dictionary word")
+                            .onSubmit(add)
+                        Button("Add", action: add)
+                            .buttonStyle(KeptPrimaryButton())
+                            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
             }
+            KeptSectionLabel(text: "SAVED WORDS")
+                .padding(.top, 6)
             if store.words.isEmpty {
                 KeptCard {
-                    Text("None yet.")
+                    Text("No words saved yet.")
+                        .font(KeptType.secondary)
                         .foregroundStyle(.secondary)
                 }
             } else {
                 KeptCard {
                     VStack(spacing: 0) {
                         ForEach(Array(store.words.enumerated()), id: \.element) { index, word in
-                            HStack {
+                            HStack(spacing: 12) {
                                 Text(word)
-                                    .font(.system(size: 14))
-                                Spacer()
+                                    .font(KeptType.body)
+                                    .textSelection(.enabled)
+                                Spacer(minLength: 8)
                                 Button("Remove") { store.remove(word) }
                                     .buttonStyle(.plain)
-                                    .font(.system(size: 12))
+                                    .font(KeptType.caption)
                                     .foregroundStyle(.secondary)
+                                    .accessibilityLabel("Remove \(word)")
                             }
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 11)
                             if index < store.words.count - 1 {
                                 Divider()
                             }
@@ -228,19 +297,28 @@ private struct SettingsPage: View {
     private let keys = KeyStatus.shared
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: KeptTheme.gutter) {
             KeptHeader(
+                eyebrow: "PREFERENCES",
                 title: "Settings",
-                subtitle: "Jev chooses the format and which dictionary word you meant. It does not rewrite the sentence. Speech stays on this Mac."
+                subtitle: "Speech stays on this Mac. Jev chooses the format and dictionary words without rewriting your sentence."
             )
+            KeptSectionLabel(text: "DICTATION")
+                .padding(.top, 6)
             LanguageSettings(store: LanguageStore.shared)
             MicrophoneSettings(store: MicStore.shared)
+            KeptSectionLabel(text: "CONNECTIONS")
+                .padding(.top, 6)
             KeptCard {
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(status)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.secondary)
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("TypeSafe")
+                                .font(KeptType.title)
+                            Text("Formats your finished take. \(status)")
+                                .font(KeptType.secondary)
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer(minLength: 8)
                         if source == .saved {
                             KeyHealthTag(health: keys.typeSafe) {
@@ -250,23 +328,25 @@ private struct SettingsPage: View {
                     }
                     SecureField("TypeSafe API key", text: $draft)
                         .textFieldStyle(.plain)
+                        .font(KeptType.body)
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(KeptColor.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    HStack {
+                        .frame(height: 38)
+                        .background(KeptColor.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                        .accessibilityLabel("TypeSafe API key")
+                    HStack(spacing: 16) {
                         Button("Save key") { save() }
                             .buttonStyle(KeptPrimaryButton())
                             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         if source == .saved {
                             Button("Remove saved key") { remove() }
                                 .buttonStyle(.plain)
-                                .font(.system(size: 13))
+                                .font(KeptType.secondary)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     if failed {
                         Text("Could not save the key.")
-                            .font(.system(size: 12))
+                            .font(KeptType.caption)
                             .foregroundStyle(.red)
                     }
                 }
@@ -310,10 +390,14 @@ private struct OpenCodeKeyCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Edit uses DeepSeek V4.1 Flash. \(source == .saved ? "OpenCode key saved." : "No OpenCode key saved yet.")")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("OpenCode")
+                        .font(KeptType.title)
+                    Text("Edits selected text with DeepSeek V4.1 Flash. \(source == .saved ? "Key saved." : "No key saved yet.")")
+                        .font(KeptType.secondary)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: 8)
                 if source == .saved {
                     KeyHealthTag(health: keys.openCode) {
@@ -323,10 +407,12 @@ private struct OpenCodeKeyCard: View {
             }
             SecureField("OpenCode API key", text: $draft)
                 .textFieldStyle(.plain)
+                .font(KeptType.body)
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(KeptColor.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            HStack {
+                .frame(height: 38)
+                .background(KeptColor.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .accessibilityLabel("OpenCode API key")
+            HStack(spacing: 16) {
                 Button("Save OpenCode key") {
                     failed = !OpenCodeKey.save(draft)
                     if !failed {
@@ -394,67 +480,20 @@ private struct KeyHealthTag: View {
 }
 
 private struct KeptHeader: View {
+    let eyebrow: String
     let title: String
     let subtitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 9) {
+            KeptSectionLabel(text: eyebrow)
             Text(title)
-                .font(.system(size: 28, weight: .semibold))
+                .font(KeptType.page)
             Text(subtitle)
-                .font(.system(size: 13))
+                .font(KeptType.secondary)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.bottom, 4)
     }
-}
-
-private struct KeptCard<Content: View>: View {
-    @ViewBuilder var content: Content
-
-    var body: some View {
-        content
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.primary.opacity(0.06))
-            )
-    }
-}
-
-struct KeptPrimaryButton: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13, weight: .medium))
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
-            .background(Color.primary.opacity(configuration.isPressed ? 0.72 : 1), in: Capsule())
-            .foregroundStyle(KeptColor.canvas)
-    }
-}
-
-enum KeptColor {
-    static let canvas = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.11, alpha: 1)
-            : NSColor(calibratedRed: 0.965, green: 0.957, blue: 0.945, alpha: 1)
-    }))
-    static let rail = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.09, alpha: 1)
-            : NSColor(calibratedRed: 0.945, green: 0.933, blue: 0.914, alpha: 1)
-    }))
-    static let card = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.16, alpha: 1)
-            : NSColor.white
-    }))
-    static let field = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
-        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(calibratedWhite: 0.12, alpha: 1)
-            : NSColor(calibratedWhite: 0.96, alpha: 1)
-    }))
-    static let selected = Color.primary.opacity(0.08)
 }
