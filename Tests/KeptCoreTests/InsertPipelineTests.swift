@@ -71,6 +71,12 @@ private final class PasteFunction {
     #expect(TakeJoin.submission(previous: "Done.", next: "Next.", field: .needsSpace) == "Next. ")
 }
 
+@Test func submissionNormalizesPastedWhitespaceToOneTrailingSpace() {
+    #expect(TakeJoin.submission(previous: "", next: "  Hello.  ") == "Hello. ")
+    #expect(TakeJoin.submission(previous: "", next: "\n• Milk\n• Eggs\n") == "• Milk\n• Eggs ")
+    #expect(TakeJoin.submission(previous: "", next: "   ") == "")
+}
+
 @Test func anUnreadFieldDoesNotStartWithASpace() {
     let paste = PasteFunction()
     let delivery = InsertPipeline.afterTake(

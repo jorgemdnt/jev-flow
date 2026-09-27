@@ -95,9 +95,8 @@ public enum TakeJoin {
 
     /// The text that is pasted. Ends with one space. Does not start with one.
     public static func submission(previous: String, next: String, field: FieldJoin = .unknown) -> String {
-        let body = next.drop(while: \.isWhitespace)
+        let body = next.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return "" }
-        if body.last?.isWhitespace == true { return String(body) }
         return body + " "
     }
 }
