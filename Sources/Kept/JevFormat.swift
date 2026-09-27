@@ -54,11 +54,11 @@ enum JevFormat {
                 ],
             ],
         ]
-        var wordIDs: [String: String] = [:]
+        var wordIDs: [String: (entry: String, spans: [String])] = [:]
         for (index, entry) in spans.keys.sorted().enumerated() {
             guard let options = spans[entry], !options.isEmpty else { continue }
             let id = "word_\(index)"
-            wordIDs[id] = entry
+            wordIDs[id] = (entry, options)
             var criteria: [String: String] = ["none": "None of these spans are the speaker saying \(entry)."]
             for span in options {
                 criteria[span] = "This span is the speaker saying \(entry), including a mishearing."
@@ -94,7 +94,7 @@ enum JevFormat {
             if status == 401 || status == 403 { throw JevFailure.rejectedKey }
             throw FormatError.http(status)
         }
-        let judgment = try parse(data, wordIDs: wordIDs, respellIDs: respellIDs)
+        let judgment = try JevResponse.parse(data, candidates: wordIDs, respell: respellIDs)
         KeptLog.format.notice("Jev HTTP \(status) in \(ms) ms: shape \(judgment.shape.rawValue, privacy: .public), \(wordIDs.count) word questions, \(judgment.replacements.count) replaced, \(respellIDs.count) sound-alikes, \(judgment.respell.count) respelled")
         return judgment
     }
@@ -120,47 +120,10 @@ enum JevFormat {
             try await Task.sleep(for: .seconds(wait))
         }
     }
-
-    private static func parse(_ data: Data, wordIDs: [String: String], respellIDs: [String: Respell.Candidate]) throws -> JevJudgment {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let answers = json["answers"] as? [String: Any] else {
-            throw FormatError.empty
-        }
-        let shape = acceptedShape(answers["shape"] as? [String: Any])
-        var replacements: [Replacement] = []
-        for (id, entry) in wordIDs {
-            guard let answer = answers[id] as? [String: Any],
-                  let choice = answer["choice"] as? String,
-                  choice != "none",
-                  let confidence = answer["confidence"] as? Double,
-                  confidence >= SpeechFormat.minimumConfidence else { continue }
-            replacements.append(Replacement(span: choice, word: entry))
-        }
-        var respell: [Respell.Candidate] = []
-        for (id, candidate) in respellIDs {
-            guard let answer = answers[id] as? [String: Any],
-                  let probabilities = answer["probabilities"] as? [String: Double],
-                  let meant = probabilities["meant"],
-                  meant >= Respell.minimumConfidence else { continue }
-            respell.append(candidate)
-        }
-        return JevJudgment(shape: shape, replacements: replacements, respell: respell)
-    }
-
-    private static func acceptedShape(_ answer: [String: Any]?) -> SpokenShape {
-        guard let choice = answer?["choice"] as? String,
-              let confidence = answer?["confidence"] as? Double,
-              confidence >= SpeechFormat.minimumConfidence,
-              let shape = SpokenShape(rawValue: choice) else {
-            return .prose
-        }
-        return shape
-    }
 }
 
 private enum FormatError: Error {
     case http(Int)
-    case empty
 }
 
 enum TypeSafeKey {
