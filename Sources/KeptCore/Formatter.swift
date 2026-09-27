@@ -89,8 +89,7 @@ public enum TakeJoin {
     }
 
     public static func needsSeparator(previous: String, next: String, field: FieldJoin = .unknown) -> Bool {
-        guard let first = next.first, !first.isWhitespace else { return false }
-        return field == .needsSpace
+        field == .needsSpace && !submission(previous: previous, next: next, field: field).isEmpty
     }
 
     /// The text that is pasted. Ends with one space. Does not start with one.
