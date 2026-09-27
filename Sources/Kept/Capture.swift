@@ -729,47 +729,41 @@ final class Session {
     }
 
     private func place(_ text: String, typeSeparator: Bool = false) -> PlaceResult {
-        let body = Self.pasteBody(text)
         switch FocusedField.caretForInsert() {
         case .selectionCouldNotCollapse:
             return .wouldReplaceSelection
         case .location(let at):
-            let start = typeSeparator ? at + 1 : at
-            if typeSeparator { _ = FocusedAppPaste.typeSpace() }
-            switch FocusedAppPaste.paste(body) {
-            case .pasted:
-                Self.scheduleTrailingSpace(for: text)
-                lastInsertLocation = start
-                lastInsertLength = text.count
-                return .placed(text)
-            case .accessibilityMissing:
-                return .accessibilityMissing
-            case .failed:
-                return .failed
-            }
+            return pasteAtCaret(text, typeSeparator: typeSeparator, location: at)
         case .unavailable:
             if let selected = FocusedField.selectedText()?.trimmingCharacters(in: .whitespacesAndNewlines), !selected.isEmpty {
                 return .wouldReplaceSelection
             }
-            if typeSeparator { _ = FocusedAppPaste.typeSpace() }
-            switch FocusedAppPaste.paste(body) {
-            case .pasted:
-                Self.scheduleTrailingSpace(for: text)
-                lastInsertLocation = nil
-                return .placed(text)
-            case .accessibilityMissing:
-                return .accessibilityMissing
-            case .failed:
-                return .failed
-            }
+            return pasteAtCaret(text, typeSeparator: typeSeparator, location: nil)
+        }
+    }
+
+    private func pasteAtCaret(_ text: String, typeSeparator: Bool, location: Int?) -> PlaceResult {
+        let attempt = PasteActions.perform(
+            text: text,
+            leading: typeSeparator,
+            typeSpace: FocusedAppPaste.typeSpace,
+            paste: FocusedAppPaste.paste,
+            didPaste: { $0 == .pasted },
+            afterPaste: { Self.scheduleTrailingSpace(for: text) }
+        )
+        switch attempt.value {
+        case .pasted:
+            lastInsertLocation = location.map { $0 + (attempt.leadingTyped ? 1 : 0) }
+            lastInsertLength = text.count
+            return .placed(text)
+        case .accessibilityMissing:
+            return .accessibilityMissing
+        case .failed:
+            return .failed
         }
     }
 
     /// The field trims a trailing space out of a paste. Type it after the paste lands.
-    private static func pasteBody(_ text: String) -> String {
-        text.hasSuffix(" ") ? String(text.dropLast()) : text
-    }
-
     private static func scheduleTrailingSpace(for text: String) {
         guard text.hasSuffix(" ") else { return }
         Task { @MainActor in
@@ -848,16 +842,14 @@ final class Session {
             status = "Could not insert. Text kept."
             return
         }
-        let payload = inserting
-        if TakeJoin.needsSeparator(previous: lastInsertedText, next: text, field: field) {
-            _ = FocusedAppPaste.typeSpace()
-        }
-        switch FocusedAppPaste.paste(payload) {
-        case .pasted:
-            recordInserted(id: id, text: inserting)
+        switch place(inserting, typeSeparator: TakeJoin.needsSeparator(previous: lastInsertedText, next: text, field: field)) {
+        case .placed(let placed):
+            recordInserted(id: id, text: placed)
             status = (note?.isEmpty == false) ? note! : "Hold Right Option to talk"
         case .accessibilityMissing:
             status = Self.insertNeedsAccessibility
+        case .wouldReplaceSelection:
+            status = "Could not insert without replacing a selection. Text kept."
         case .failed:
             status = "Could not insert. Text kept."
         }
@@ -865,22 +857,25 @@ final class Session {
 
     private func insertStored(id: UUID) async {
         guard let take = takes.first(where: { $0.id == id }) else { return }
-        let stored = take.insertedText ?? Formatter.finished(take.rawTranscript)
-        let text = stored.last?.isWhitespace == true ? stored : stored + " "
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard Self.accessibilityTrusted(prompt: true) else {
             status = Self.insertNeedsAccessibility
             return
         }
         await FocusedAppPaste.focusForeignAppIfNeeded()
-        switch FocusedAppPaste.paste(text) {
-        case .pasted:
-            lastInsertedText = text
+        let field = FocusedField.joinEdge()
+        let stored = take.insertedText ?? Formatter.finished(take.rawTranscript)
+        let text = TakeJoin.submission(previous: lastInsertedText, next: stored, field: field)
+        guard !text.isEmpty else { return }
+        switch place(text, typeSeparator: TakeJoin.needsSeparator(previous: lastInsertedText, next: stored, field: field)) {
+        case .placed(let placed):
+            lastInsertedText = placed
             let url = KeptPaths.applicationSupport.appendingPathComponent("last-inserted.txt")
-            try? text.write(to: url, atomically: true, encoding: .utf8)
+            try? placed.write(to: url, atomically: true, encoding: .utf8)
             status = "Hold Right Option to talk"
         case .accessibilityMissing:
             status = Self.insertNeedsAccessibility
+        case .wouldReplaceSelection:
+            status = "Could not insert without replacing a selection. Text kept."
         case .failed:
             status = "Could not insert. Text kept."
         }
