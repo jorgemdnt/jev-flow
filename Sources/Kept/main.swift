@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import ApplicationServices
 import Foundation
 import KeptCore
 import SwiftUI
@@ -34,6 +36,26 @@ struct KeptApp: App {
     }
 }
 
+// Read-only diagnostic. Run the installed executable so its bundle resources and
+// privacy attribution are the ones under test; this does not request permission.
+if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--verify-doctor" {
+    let mic = AVCaptureDevice.authorizationStatus(for: .audio)
+    let micStatus: String = switch mic {
+    case .authorized: "authorized"
+    case .denied: "denied"
+    case .restricted: "restricted"
+    case .notDetermined: "not-determined"
+    @unknown default: "unknown"
+    }
+    let model = ParakeetEngine.bundleDirectory
+    let required = ["parakeet_vocab.json", "Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"]
+    let modelsPresent = model.map { directory in
+        required.allSatisfy { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) }
+    } ?? false
+    FileHandle.standardOutput.write(Data("accessibility \(AXIsProcessTrusted() ? "authorized" : "missing")\nmicrophone \(micStatus)\nopencode_key \(OpenCodeKey.load() == nil ? "missing" : "present")\nmodels \(modelsPresent ? "present" : "missing")\n".utf8))
+    exit(0)
+}
+
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--ui-snapshot" {
     let directory = CommandLine.arguments[2]
     let window = UISnapshot.save(in: directory)
@@ -45,7 +67,6 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--ui-snapshot"
 if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--transcribe" {
     let path = CommandLine.arguments[2]
     let box = TranscribeBox()
-    let semaphore = DispatchSemaphore(value: 0)
     Task {
         let started = ContinuousClock.now
         do {
@@ -57,9 +78,11 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--transcribe" 
             FileHandle.standardError.write(Data("\(error)\n".utf8))
             box.code = 1
         }
-        semaphore.signal()
+        box.complete = true
     }
-    semaphore.wait()
+    while !box.complete {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
     exit(box.code)
 }
 
