@@ -38,12 +38,13 @@ enum FocusedAppPaste {
             return .failed
         }
 
+        let postedChange = board.changeCount
         restoreGeneration += 1
         let generation = restoreGeneration
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(200))
-            guard generation == restoreGeneration else { return }
-            restore(saved, to: .general)
+            guard generation == restoreGeneration, board.changeCount == postedChange else { return }
+            restore(saved, to: board)
         }
         return .pasted
     }
