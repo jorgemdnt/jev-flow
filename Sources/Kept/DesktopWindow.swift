@@ -181,7 +181,6 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
             statusItem?.menu = nil
             statusItem?.button?.target = self
             statusItem?.button?.action = #selector(cancelLive)
-            showLive()
             liveModel.update(
                 committed: session.liveCommitted,
                 tail: session.liveTail,
@@ -193,6 +192,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
                 noticeBody: session.noticeBody
             )
             liveHost?.rootView = LiveCard(model: liveModel)
+            showLive()
         } else {
             hideLive()
             statusItem?.button?.action = nil
@@ -424,61 +424,85 @@ private struct EditCard: View {
     @ObservedObject var model: LiveCardModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                LucideMark(icon: .pencil, size: 12, color: .secondary)
-                Text("Change")
-                    .font(.system(size: 12, weight: .semibold))
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center, spacing: 9) {
+                LucideMark(icon: .pencil, size: 15, color: .accentColor)
+                    .frame(width: 30, height: 30)
+                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Edit")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("Say the change")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Text("RELEASE TO APPLY")
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .tracking(0.6)
                     .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text(model.mic.isEmpty ? InputDevices.name(uid: MicStore.savedUID()) : model.mic)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                Text("release")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.tertiary)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.kind.isEmpty ? "Text" : model.kind)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                Text(model.subject.isEmpty ? "Nothing selected" : model.subject)
+            .padding(.bottom, 12)
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 5) {
+                caption("SELECTED TEXT")
+                Text(model.subject.isEmpty ? "Select text to edit" : model.subject)
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(model.subject.isEmpty ? .tertiary : .secondary)
                     .truncationMode(.head)
-                    .lineLimit(4)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            instruction
-                .font(.system(size: 14, weight: .medium))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .bottomLeading)
-                .clipped()
+            .padding(.vertical, 10)
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+
+            VStack(alignment: .leading, spacing: 6) {
+                caption("YOUR INSTRUCTION")
+                instruction
+                    .font(.system(size: 14, weight: .medium))
+                    .truncationMode(.head)
+                    .lineLimit(8)
+                    .frame(maxWidth: .infinity, minHeight: 22, maxHeight: .infinity, alignment: .bottomLeading)
+                    .clipped()
+            }
+            .padding(.top, 10)
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.7), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.accentColor.opacity(0.65), lineWidth: 1.5)
         )
+    }
+
+    private func caption(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .tracking(0.8)
+            .foregroundStyle(.secondary)
     }
 
     private var instruction: Text {
         let spoken = model.committed
         let tail = model.tail
         if spoken.isEmpty, tail.isEmpty {
-            return Text("Say what to change")
+            return Text("Speak your instruction…")
                 .foregroundStyle(.tertiary)
         }
+        let full = [spoken, tail].filter { !$0.isEmpty }.joined(separator: " ")
+        let visible = LiveCardMetrics.trailingInstruction(full)
+        if visible != full { return Text(visible).foregroundStyle(.primary) }
         let committed = Text(spoken).foregroundStyle(.primary)
         let open = Text(tail.isEmpty ? "" : (spoken.isEmpty ? tail : " " + tail)).foregroundStyle(.secondary)
-        let mark = Text(" ▍").foregroundStyle(.tertiary)
-        return committed + open + mark
+        return committed + open
     }
 }
 
@@ -557,6 +581,34 @@ private struct SpeechCard: View {
     }
 }
 
+@MainActor
+enum EditCardSnapshot {
+    static func save(to path: String, dark: Bool, long: Bool) -> Bool {
+        _ = NSApplication.shared
+        let model = LiveCardModel()
+        let selection = long
+            ? "The current copy is too long and the important phrase is at the end of this selected paragraph."
+            : "Ship the update tomorrow."
+        let instruction = long
+            ? "Keep the first sentence. Shorten the rest, correct the date, and make the final paragraph end with the exact next step. " + String(repeating: "Keep this note readable. ", count: 18) + "End with ship it Friday."
+            : "Change tomorrow to Friday."
+        model.update(committed: instruction, tail: "", phase: .editing, mic: "MacBook Pro Microphone", subject: selection, kind: "Selection", noticeTitle: "", noticeBody: "")
+        let size = LiveCardMetrics.edit(selection: selection, instruction: instruction)
+        let rect = NSRect(origin: .zero, size: size)
+        let host = NSHostingView(rootView: EditCard(model: model))
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let window = NSWindow(contentRect: rect, styleMask: .borderless, backing: .buffered, defer: false)
+        window.contentView = host
+        host.frame = rect
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return false }
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: URL(fileURLWithPath: path))) != nil
+    }
+}
+
 enum LiveCardMetrics {
     static let width: CGFloat = 320
     static let maxBody: CGFloat = 180
@@ -573,9 +625,28 @@ enum LiveCardMetrics {
         let quote = NSFont.systemFont(ofSize: 12)
         let spoken = NSFont.systemFont(ofSize: 14, weight: .medium)
         let instructionText = instruction.isEmpty ? "Say what to change" : instruction
-        let selectionHeight = min(72, max(18, box(selection.isEmpty ? " " : selection, font: quote, width: width - 40).height))
-        let instructionHeight = min(maxBody, max(22, box(instructionText, font: spoken, width: width - 24).height))
-        return NSSize(width: width, height: 36 + selectionHeight + instructionHeight + 28)
+        let selectionHeight = min(54, max(18, box(selection.isEmpty ? "Select text to edit" : selection, font: quote, width: width - 28).height))
+        let instructionHeight = min(144, max(22, box(instructionText, font: spoken, width: width - 28).height))
+        return NSSize(width: width, height: 137 + selectionHeight + instructionHeight)
+    }
+
+    static func trailingInstruction(_ text: String) -> String {
+        let font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        let measure: (String) -> CGFloat = { box($0, font: font, width: width - 28).height }
+        guard measure(text) > 136 else { return text }
+        let words = text.split(separator: " ")
+        var low = 0
+        var high = words.count - 1
+        while low < high {
+            let middle = (low + high) / 2
+            let candidate = "…" + words[middle...].joined(separator: " ")
+            if measure(candidate) <= 136 {
+                high = middle
+            } else {
+                low = middle + 1
+            }
+        }
+        return "…" + words[low...].joined(separator: " ")
     }
 
     static func notice(title: String, body: String) -> NSSize {
