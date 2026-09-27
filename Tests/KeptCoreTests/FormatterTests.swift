@@ -7,6 +7,17 @@ import Testing
     #expect(Formatter.format("let's shoot we are five thousand forty-nine") == "let's ship PR 5049")
 }
 
+@Test func hundredsMillionsAndTensPairsBecomeDigitsWithoutChangingCounts() {
+    #expect(Formatter.format("a hundred and twenty three") == "123")
+    #expect(Formatter.format("two million twenty-one") == "2000021")
+    #expect(Formatter.format("one two three") == "one two three")
+}
+
+@Test func peeAreAfterShipIsPRBeforeASpokenNumber() {
+    #expect(Formatter.format("shoot pee are twenty one") == "ship PR 21")
+    #expect(Formatter.format("we are twenty one people") == "we are 21 people")
+}
+
 @Test func aCountStaysWordsAndASmallNumberStaysAWord() {
     #expect(Formatter.format("one two three") == "one two three")
     #expect(Formatter.format("we are five minutes late") == "we are five minutes late")
