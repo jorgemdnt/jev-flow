@@ -255,7 +255,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     static func liveSize(phase: LivePhase, spoken: String, selection: String, noticeTitle: String, noticeBody: String) -> NSSize {
         switch phase {
-        case .editing:
+        case .editing, .requestingEdit:
             LiveCardMetrics.edit(selection: selection, instruction: spoken)
         case .notice:
             LiveCardMetrics.notice(title: noticeTitle, body: noticeBody)
@@ -268,6 +268,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         if session.livePhase == .listening || session.livePhase == .locked { return "Listening" }
         if session.livePhase == .notice { return session.status }
         if session.livePhase == .editing { return "Edit" }
+        if session.livePhase == .requestingEdit { return "Requesting edit" }
         if session.livePhase == .transcribing { return "Transcribing" }
         if session.livePhase == .cleaning { return "Formatting" }
         if session.status == "Hold Right Option to talk" { return "Ready" }
@@ -277,7 +278,7 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
     private var menuDot: NSColor {
         switch session.livePhase {
         case .listening, .locked: .systemRed
-        case .editing: .systemBlue
+        case .editing, .requestingEdit: .systemBlue
         case .notice: .systemRed
         case .transcribing, .cleaning: .systemOrange
         case .idle: session.canInsert ? .systemGreen : .systemOrange
@@ -375,6 +376,8 @@ private struct LiveCard: View {
         Group {
             if model.phase == .notice {
                 NoticeCard(title: model.noticeTitle, message: model.noticeBody)
+            } else if model.phase == .requestingEdit {
+                RequestingEditCard(model: model)
             } else if model.phase == .editing {
                 EditCard(model: model)
             } else {
@@ -413,6 +416,45 @@ private struct NoticeCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.red.opacity(0.45), lineWidth: 1)
         )
+    }
+}
+
+private struct RequestingEditCard: View {
+    @ObservedObject var model: LiveCardModel
+    @State private var started = Date()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 9) {
+                ProgressView().controlSize(.small)
+                Text("Editing selection…")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text("\(Int(context.date.timeIntervalSince(started)))s")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text(model.subject)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .truncationMode(.head)
+            Text(model.committed)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(3)
+                .truncationMode(.head)
+            Spacer(minLength: 0)
+            Text("Escape or click to cancel · Nothing pastes until the edit is ready")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(KeptColor.card, in: RoundedRectangle(cornerRadius: KeptTheme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: KeptTheme.radius, style: .continuous)
+            .stroke(KeptColor.accent.opacity(0.65), lineWidth: 1.5))
     }
 }
 
@@ -578,6 +620,7 @@ private struct SpeechCard: View {
         case .listening: "Listening"
         case .locked: "Locked"
         case .editing: "Edit"
+        case .requestingEdit: "Editing selection"
         case .notice: "Edit failed"
         case .transcribing: "Transcribing"
         case .cleaning: "Formatting"
@@ -639,6 +682,9 @@ enum LiveCardSnapshot {
             let notice = LiveCardMetrics.notice(title: "Select text", body: "Select the text you want to change first.")
             guard UISnapshot.capture(LiveCard(model: model), size: notice, dark: dark, to: root.appendingPathComponent("notice-\(suffix).png")) else { return false }
             guard EditCardSnapshot.save(to: root.appendingPathComponent("edit-\(suffix).png").path, dark: dark, long: false) else { return false }
+            model.update(committed: "Change tomorrow to Friday.", tail: "", phase: .requestingEdit, mic: "", subject: "Ship the update tomorrow.", kind: "Selection", noticeTitle: "", noticeBody: "")
+            let requesting = LiveCardMetrics.edit(selection: model.subject, instruction: model.committed)
+            guard UISnapshot.capture(LiveCard(model: model), size: requesting, dark: dark, to: root.appendingPathComponent("requesting-edit-\(suffix).png")) else { return false }
         }
         return true
     }

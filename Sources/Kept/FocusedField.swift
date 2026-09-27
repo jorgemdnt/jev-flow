@@ -60,21 +60,33 @@ enum FocusedField {
         var text: String?
         var app: String
         var outcome: String
+        var pid: pid_t?
+        var element: AXUIElement?
+    }
+
+    static func sameTarget(as original: SelectionRead) -> Bool {
+        guard let pid = original.pid,
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+        guard let originalElement = original.element else { return true } // Clipboard fallback has no AX element.
+        guard let current = focusedElement().element else { return false }
+        return CFEqual(originalElement, current)
     }
 
     static func selectionRead() -> SelectionRead {
-        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+        let front = NSWorkspace.shared.frontmostApplication
+        let app = front?.bundleIdentifier ?? "unknown"
+        let pid = front?.processIdentifier
         let (focused, found) = focusedElement()
         guard let focused else {
-            return SelectionRead(text: nil, app: app, outcome: "no focused element (AX \(found.rawValue))")
+            return SelectionRead(text: nil, app: app, outcome: "no focused element (AX \(found.rawValue))", pid: pid, element: nil)
         }
         var value: CFTypeRef?
         let read = AXUIElementCopyAttributeValue(focused, kAXSelectedTextAttribute as CFString, &value)
         guard read == .success else {
-            return SelectionRead(text: nil, app: app, outcome: "selected text unreadable (AX \(read.rawValue))")
+            return SelectionRead(text: nil, app: app, outcome: "selected text unreadable (AX \(read.rawValue))", pid: pid, element: focused)
         }
         let text = value as? String
-        return SelectionRead(text: text, app: app, outcome: "\(text?.count ?? 0) chars")
+        return SelectionRead(text: text, app: app, outcome: "\(text?.count ?? 0) chars", pid: pid, element: focused)
     }
 
     static func deleteSelection() -> Bool {
