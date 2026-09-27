@@ -11,7 +11,7 @@ Open macOS System Settings → Privacy & Security → Microphone and Accessibili
 
 ## Driving it with verify-jevflow
 
-Run `scripts/doctor.sh` for nonprompting TCC status and installed bundle. Human verifies actual mic take and field insertion, no menu warning, caret mark on field; save reviewed/redacted `log show --predicate 'subsystem == "local.kept.app"' --info --last 10m`.
+Run `.agents/skills/verify-jevflow/scripts/doctor.sh` for nonprompting TCC status and installed bundle. Human verifies actual mic take and field insertion, no menu warning, caret mark on field; save reviewed/redacted `log show --predicate 'subsystem == "local.kept.app"' --info --last 10m`.
 
 Record the action and observed result in `$E/evidence.md`; explicitly mark unperformed physical-hold checks pending.
 
