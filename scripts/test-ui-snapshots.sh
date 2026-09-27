@@ -9,7 +9,7 @@ swift build --product Kept -j 4
 bin_dir=$(swift build --product Kept --show-bin-path)
 "$bin_dir/Kept" --ui-snapshot "$output"
 for appearance in light dark; do
-    for view in history history-empty dictionary settings settings-full onboarding listening locked edit notice; do
+    for view in history history-empty dictionary settings settings-full onboarding listening locked long-speech edit notice; do
         image="$output/$view-$appearance.png"
         test -s "$image"
         /usr/bin/sips -g pixelWidth -g pixelHeight "$image" >/dev/null

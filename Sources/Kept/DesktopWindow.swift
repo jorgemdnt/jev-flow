@@ -548,6 +548,9 @@ private struct SpeechCard: View {
     private var line: Text {
         let committed = model.committed
         let tail = model.tail
+        let full = [committed, tail].filter { !$0.isEmpty }.joined(separator: " ")
+        let visible = LiveCardMetrics.trailingSpeech(full)
+        if visible != full { return Text(visible + " ▍").foregroundStyle(.primary) }
         let spoken = Text(committed.isEmpty ? "" : committed)
             .foregroundStyle(.primary)
         let open = Text(tail.isEmpty ? "" : (committed.isEmpty ? tail : " " + tail))
@@ -625,6 +628,13 @@ enum LiveCardSnapshot {
             model.update(committed: "The longer dictation line stays in the card while the microphone remains locked.", tail: "Keep speaking.", phase: .locked, mic: "MacBook Pro Microphone", subject: "", kind: "", noticeTitle: "", noticeBody: "")
             let locked = LiveCardMetrics.speech("The longer dictation line stays in the card while the microphone remains locked. Keep speaking.")
             guard UISnapshot.capture(LiveCard(model: model), size: locked, dark: dark, to: root.appendingPathComponent("locked-\(suffix).png")) else { return false }
+            let longSpeech = String(repeating: "The update is ready for the next review. ", count: 24) + "End with ship it Friday."
+            let longSize = LiveCardMetrics.speech(longSpeech)
+            let visible = LiveCardMetrics.trailingSpeech(longSpeech)
+            guard longSize.height == LiveCardMetrics.maxSpeechHeight,
+                  visible.hasPrefix("… "), visible.hasSuffix("End with ship it Friday."), visible != longSpeech else { return false }
+            model.update(committed: longSpeech, tail: "", phase: .locked, mic: "MacBook Pro Microphone", subject: "", kind: "", noticeTitle: "", noticeBody: "")
+            guard UISnapshot.capture(LiveCard(model: model), size: longSize, dark: dark, to: root.appendingPathComponent("long-speech-\(suffix).png")) else { return false }
             model.update(committed: "", tail: "", phase: .notice, mic: "", subject: "", kind: "", noticeTitle: "Select text", noticeBody: "Select the text you want to change first.")
             let notice = LiveCardMetrics.notice(title: "Select text", body: "Select the text you want to change first.")
             guard UISnapshot.capture(LiveCard(model: model), size: notice, dark: dark, to: root.appendingPathComponent("notice-\(suffix).png")) else { return false }
@@ -636,14 +646,36 @@ enum LiveCardSnapshot {
 
 enum LiveCardMetrics {
     static let width: CGFloat = 320
-    static let maxBody: CGFloat = 180
+    static let maxSpeechHeight: CGFloat = 224
+    private static let speechChrome: CGFloat = 72
+    private static let maxSpeechBody = maxSpeechHeight - speechChrome
 
     static func speech(_ text: String) -> NSSize {
         let font = NSFont.systemFont(ofSize: 15, weight: .medium)
-        let sample = text.isEmpty ? "…" : text
+        let sample = text.isEmpty ? "…" : text + " ▍"
         let wrapped = box(sample, font: font, width: width - 28)
-        let body = min(maxBody, max(22, wrapped.height))
-        return NSSize(width: width, height: 72 + body)
+        let body = min(maxSpeechBody, max(22, wrapped.height))
+        return NSSize(width: width, height: speechChrome + body)
+    }
+
+    static func trailingSpeech(_ text: String) -> String {
+        guard !text.isEmpty else { return text }
+        let font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        let measure: (String) -> CGFloat = { box($0 + " ▍", font: font, width: width - 28).height }
+        guard measure(text) > maxSpeechBody else { return text }
+        let words = text.split(whereSeparator: \.isWhitespace)
+        var low = 0
+        var high = words.count - 1
+        while low < high {
+            let middle = (low + high) / 2
+            let candidate = "… " + words[middle...].joined(separator: " ")
+            if measure(candidate) <= maxSpeechBody {
+                high = middle
+            } else {
+                low = middle + 1
+            }
+        }
+        return "… " + words[low...].joined(separator: " ")
     }
 
     static func edit(selection: String, instruction: String) -> NSSize {
