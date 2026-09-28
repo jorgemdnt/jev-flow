@@ -32,7 +32,7 @@ let package = Package(
         // plants that link. -F and -framework are what the test bundle itself needs.
         .testTarget(
             name: "KeptCoreTests",
-            dependencies: ["KeptCore"],
+            dependencies: ["KeptCore", "Kept"],
             swiftSettings: [
                 .unsafeFlags([
                     "-F", "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",

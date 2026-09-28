@@ -28,20 +28,28 @@ enum KeySource {
 }
 
 enum JevFormat {
+    typealias Transport = @Sendable (URLRequest) async throws -> (Data, URLResponse)
     private static let endpoint = URL(string: "https://api.typesafe.ai/v1/systemone")!
+    private static let timeout: Duration = .milliseconds(1500)
     /// Pinned. The confidence bars were measured on this version; `jev-latest`
     /// moves when TypeSafe ships a new one.
     static let model = "jev-1.13.0"
 
     static func prepare(raw: String, dictionary: [String]) async -> CleanupOutcome {
-        let result = await JevDelivery.prepare(raw: raw, dictionary: dictionary, key: TypeSafeKey.load()) { corrected, key in
-            try await ask(raw: raw, corrected: corrected, dictionary: dictionary, key: key)
+        await prepare(raw: raw, dictionary: dictionary, key: TypeSafeKey.load()) {
+            try await URLSession.shared.data(for: $0)
+        }
+    }
+
+    static func prepare(raw: String, dictionary: [String], key: String?, send: @escaping Transport) async -> CleanupOutcome {
+        let result = await JevDelivery.prepare(raw: raw, dictionary: dictionary, key: key) { corrected, key in
+            try await ask(raw: raw, corrected: corrected, dictionary: dictionary, key: key, send: send)
         }
         if let note = result.note { return .local(result.text, note: note) }
         return .model(result.text)
     }
 
-    private static func ask(raw: String, corrected: String, dictionary: [String], key: String) async throws -> JevJudgment {
+    private static func ask(raw: String, corrected: String, dictionary: [String], key: String, send: @escaping Transport) async throws -> JevJudgment {
         let spans = SpeechFormat.candidates(in: corrected, entries: dictionary)
         var questions: [String: Any] = [
             "shape": [
@@ -86,7 +94,16 @@ enum JevFormat {
         ]
         let payload = try JSONSerialization.data(withJSONObject: body)
         let started = ContinuousClock.now
-        let (data, status) = try await post(payload, key: key)
+        let (data, status): (Data, Int)
+        do {
+            (data, status) = try await post(payload, key: key, send: send)
+        } catch {
+            if (error as? URLError)?.code == .timedOut {
+                let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
+                KeptLog.format.error("Jev timed out after \(ms) ms")
+            }
+            throw error
+        }
         let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
         await MainActor.run { KeyStatus.shared.typeSafe = KeyHealth(status: status) }
         guard (200..<300).contains(status) else {
@@ -99,25 +116,34 @@ enum JevFormat {
         return judgment
     }
 
-    /// 429 and 529 are rate limits and overload. The docs ask for a backoff.
-    /// The paste is waiting, so retry once, briefly.
-    private static func post(_ payload: Data, key: String) async throws -> (Data, Int) {
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 8
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.httpBody = payload
-        var retried = false
-        while true {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            let http = response as? HTTPURLResponse
-            let status = http?.statusCode ?? 0
-            guard status == 429 || status == 529, !retried else { return (data, status) }
-            retried = true
-            let wait = http?.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init).map { min($0, 1.5) } ?? 0.4
-            KeptLog.format.notice("Jev HTTP \(status), retrying in \(wait, format: .fixed(precision: 1)) s")
-            try await Task.sleep(for: .seconds(wait))
+    /// Bound the entire format attempt, including any rate-limit retry.
+    private static func post(_ payload: Data, key: String, send: @escaping Transport) async throws -> (Data, Int) {
+        try await withThrowingTaskGroup(of: (Data, Int).self) { group in
+            group.addTask {
+                var request = URLRequest(url: endpoint)
+                request.httpMethod = "POST"
+                request.timeoutInterval = TimeInterval(timeout / .seconds(1))
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                request.httpBody = payload
+                var retried = false
+                while true {
+                    let (data, response) = try await send(request)
+                    let http = response as? HTTPURLResponse
+                    let status = http?.statusCode ?? 0
+                    guard status == 429 || status == 529, !retried else { return (data, status) }
+                    retried = true
+                    let wait = http?.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init).map { min($0, 1.5) } ?? 0.4
+                    KeptLog.format.notice("Jev HTTP \(status), retrying in \(wait, format: .fixed(precision: 1)) s")
+                    try await Task.sleep(for: .seconds(wait))
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw URLError(.timedOut)
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
         }
     }
 }
