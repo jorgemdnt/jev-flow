@@ -1,0 +1,17 @@
+JevFlow speech model attribution
+
+NVIDIA Parakeet TDT 0.6B v3
+Creator: NVIDIA
+Source: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+License: Creative Commons Attribution 4.0 International (CC-BY-4.0)
+License terms: https://creativecommons.org/licenses/by/4.0/legalcode.en
+
+CoreML conversion distributed by FluidInference:
+https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml
+The bundled runtime uses the conversion's quantized encoder, preprocessor,
+decoder, joint, and vocabulary. JevFlow does not train or modify these weights.
+
+FluidAudio runtime: https://github.com/FluidInference/FluidAudio
+License: Apache License 2.0
+
+Phonon-2 was evaluated but is not bundled or used by JevFlow.

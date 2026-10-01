@@ -12,6 +12,8 @@ macOS 15. No Xcode.app. Command Line Tools only. The default recognizer is NVIDI
 
 A pinned language outside Parakeet's 25 European languages uses Homebrew `whisper-cli`. Auto, English, Portuguese, and the rest of that set do not. Japanese, Korean, and Chinese stay on whisper-cli because v3 romanizes them. Arabic and Hindi stay on whisper-cli because v3 does not support them. The final transcript is a v3 batch. It is not the English-only Parakeet EOU streaming model.
 
+Phonon-2 did not pass the real-take migration gate on this Mac. English and Auto stay on v3; do not add a language-ID first pass or bundle the rejected English-only model. See `docs/phonon-2-benchmark.md` for the measurements and the limits of the transcript comparison.
+
 2026 desktop landscape, and why it is not the stack:
 
 - Electron: still the default when a team wants one Chromium everywhere. Wrong here. An always-on dictation utility should not ship a browser.

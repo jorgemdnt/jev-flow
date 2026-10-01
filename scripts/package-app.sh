@@ -16,6 +16,7 @@ cp "$bin_dir/Kept" "$app/Contents/MacOS/Kept"
 chmod 755 "$app/Contents/MacOS/Kept"
 mkdir -p "$app/Contents/Resources"
 cp "$root/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
+cp "$root/Resources/SpeechModelAttribution.txt" "$app/Contents/Resources/SpeechModelAttribution.txt"
 
 model_cache="$HOME/Library/Application Support/Kept/models/parakeet-tdt-0.6b-v3-coreml"
 python3 "$root/scripts/fetch-parakeet.py" "$model_cache"
@@ -99,6 +100,7 @@ test "$(plutil -extract LSUIElement raw "$installed/Contents/Info.plist")" = "tr
 test "$(plutil -extract CFBundleIdentifier raw "$installed/Contents/Info.plist")" = "local.kept.app"
 test "$(plutil -extract CFBundleName raw "$installed/Contents/Info.plist")" = "JevFlow"
 test -f "$installed/Contents/Resources/AppIcon.icns"
+test -f "$installed/Contents/Resources/SpeechModelAttribution.txt"
 test -f "$installed/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/parakeet_vocab.json"
 test -d "$installed/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/Encoder.mlmodelc"
 

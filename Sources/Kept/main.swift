@@ -52,7 +52,8 @@ if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--verify-docto
     let modelsPresent = model.map { directory in
         required.allSatisfy { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) }
     } ?? false
-    FileHandle.standardOutput.write(Data("accessibility \(AXIsProcessTrusted() ? "authorized" : "missing")\nmicrophone \(micStatus)\nopencode_key \(OpenCodeKey.load() == nil ? "missing" : "present")\nmodels \(modelsPresent ? "present" : "missing")\n".utf8))
+    let routes = ["auto", "en", "pt"].map { "\($0)=\(SpeechRoute.engine(for: $0).rawValue)" }.joined(separator: " ")
+    FileHandle.standardOutput.write(Data("speech_route_check \(routes)\naccessibility \(AXIsProcessTrusted() ? "authorized" : "missing")\nmicrophone \(micStatus)\nopencode_key \(OpenCodeKey.load() == nil ? "missing" : "present")\nmodels \(modelsPresent ? "present" : "missing")\n".utf8))
     exit(0)
 }
 
