@@ -24,6 +24,13 @@ ditto "$model_cache" "$app/Contents/Resources/parakeet-tdt-0.6b-v3-coreml"
 test -f "$app/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/parakeet_vocab.json"
 test -d "$app/Contents/Resources/parakeet-tdt-0.6b-v3-coreml/Encoder.mlmodelc"
 
+# The dictionary word spotter. It ships in the app; launch does not download it.
+ctc_cache="$HOME/Library/Application Support/Kept/models/parakeet-ctc-110m-coreml"
+python3 "$root/scripts/fetch-parakeet.py" "$ctc_cache" ctc
+ditto "$ctc_cache" "$app/Contents/Resources/parakeet-ctc-110m-coreml"
+test -f "$app/Contents/Resources/parakeet-ctc-110m-coreml/tokenizer.json"
+test -d "$app/Contents/Resources/parakeet-ctc-110m-coreml/AudioEncoder.mlmodelc"
+
 cat > "$app/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

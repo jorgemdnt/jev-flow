@@ -34,7 +34,7 @@ public enum EditOutcome: Equatable, Sendable {
         case .truncated: ("Edit incomplete", "The model ran out of room. Select less text and retry.")
         case .invalidResponse: ("Edit failed", "The model returned no usable text. Retry the edit.")
         case .echoedInstruction: ("Edit failed", "The model repeated your instruction. Try saying it differently.")
-        case .pasteFailed: ("Couldn't paste", "Return to the original field and retry the edit.")
+        case .pasteFailed: ("Couldn't paste", "The edit is on the clipboard. Return to the field and press ⌘V.")
         }
     }
 }
@@ -51,7 +51,7 @@ public enum EditService {
         userAgent: String,
         send: Transport,
         matchesTarget: @MainActor () async -> Bool,
-        paste: @MainActor (String) -> Bool
+        paste: @MainActor (String) async -> Bool
     ) async -> EditOutcome {
         guard !Task.isCancelled else { return .cancelled }
         guard !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .noSelection }
@@ -106,6 +106,6 @@ public enum EditService {
         guard await matchesTarget(), !Task.isCancelled else {
             return Task.isCancelled ? .cancelled : .selectionChanged
         }
-        return paste(edited) ? .applied : .pasteFailed
+        return await paste(edited) ? .applied : .pasteFailed
     }
 }

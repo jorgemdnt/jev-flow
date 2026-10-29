@@ -12,7 +12,7 @@ Your speech stays on this Mac. [NVIDIA Parakeet TDT 0.6B v3](https://huggingface
 
 Phonon-2 was tested on this Mac's saved takes and did not win. English stays on v3, as does Auto; no English-only language detector or second model is added. See the [benchmark and routing decision](docs/phonon-2-benchmark.md).
 
-When you release the key, [Jev](https://typesafe.ai) decides how the text should look. It can come out as prose, a list, or a numbered list. Jev also picks which dictionary word you meant. Every word you said stays in the text. If the Jev call fails, JevFlow inserts the local transcript instead.
+When you release the key, a short take with nothing to correct pastes straight away. Dictionary words are found in the audio: a small on-device model (Parakeet CTC 110M) listens for your terms, so a JevFlow that the recognizer wrote as "Jabflow" or "Jeff O" is still caught. For the rest, [Jev](https://typesafe.ai) decides whether the text needs layout (a list, steps, or paragraphs) and confirms each dictionary word the audio suggested, so "posso" in a Portuguese sentence stays "posso". Only a take that needs layout goes to DeepSeek V4.1 Flash on OpenCode, using the same key as edit mode. JevFlow pastes that layout only if every word you said is still there, in order. If any call fails, JevFlow inserts the local text instead.
 
 ## TypeSafe key
 
@@ -36,4 +36,4 @@ The menu-bar icon is the Option key.
 
 JevFlow is released under the [MIT](LICENSE) license. The Option, book, clock, and settings marks come from [Lucide](https://lucide.dev) and are under the ISC license. See [NOTICE](NOTICE).
 
-The bundled Parakeet TDT 0.6B v3 weights are created by [NVIDIA](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) and distributed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/legalcode.en). [FluidInference](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml) provides the quantized CoreML conversion; [FluidAudio](https://github.com/FluidInference/FluidAudio) is Apache-2.0. JevFlow does not train or modify the weights. [Speech-model attribution](Resources/SpeechModelAttribution.txt) is also included in the app's Resources.
+The bundled Parakeet TDT 0.6B v3 and Parakeet TDT-CTC 110M ([word spotter](https://huggingface.co/nvidia/parakeet-tdt_ctc-110m)) weights are created by [NVIDIA](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) and distributed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/legalcode.en). [FluidInference](https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v3-coreml) provides the quantized CoreML conversion; [FluidAudio](https://github.com/FluidInference/FluidAudio) is Apache-2.0. JevFlow does not train or modify the weights. [Speech-model attribution](Resources/SpeechModelAttribution.txt) is also included in the app's Resources.

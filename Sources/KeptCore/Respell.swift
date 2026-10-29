@@ -22,7 +22,7 @@ public enum Respell {
     ]
 
     /// Replacing a word the recognizer heard is riskier than choosing a
-    /// shape. Measured on stored takes: true cases scored 0.91 to 0.98,
+    /// layout. Measured on stored takes: true cases scored 0.91 to 0.98,
     /// false ones at most 0.71.
     public static let minimumConfidence = 0.85
 

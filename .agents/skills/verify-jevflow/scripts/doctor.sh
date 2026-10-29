@@ -22,6 +22,7 @@ if [ -n "$running" ]; then printf 'OK running installed executable pid %s\n' "$r
 probe=$("$exe" --verify-doctor) || { printf 'FAIL executable doctor probe\n'; exit 1; }
 printf '%s\n' "$probe"
 printf '%s\n' "$probe" | /usr/bin/grep -q '^models present$' || problem=1
+printf '%s\n' "$probe" | /usr/bin/grep -q '^spotter present$' || problem=1
 printf '%s\n' "$probe" | /usr/bin/grep -q '^microphone authorized$' || problem=1
 printf '%s\n' "$probe" | /usr/bin/grep -q '^accessibility authorized$' || problem=1
 if ! printf '%s\n' "$probe" | /usr/bin/grep -q '^opencode_key present$'; then

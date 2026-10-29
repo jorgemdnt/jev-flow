@@ -52,8 +52,13 @@ if CommandLine.arguments.count == 2, CommandLine.arguments[1] == "--verify-docto
     let modelsPresent = model.map { directory in
         required.allSatisfy { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) }
     } ?? false
+    let spotter = VocabularySpotter.bundleDirectory
+    let spotterFiles = ["tokenizer.json", "vocab.json", "MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc"]
+    let spotterPresent = spotter.map { directory in
+        spotterFiles.allSatisfy { FileManager.default.fileExists(atPath: directory.appendingPathComponent($0).path) }
+    } ?? false
     let routes = ["auto", "en", "pt"].map { "\($0)=\(SpeechRoute.engine(for: $0).rawValue)" }.joined(separator: " ")
-    FileHandle.standardOutput.write(Data("speech_route_check \(routes)\naccessibility \(AXIsProcessTrusted() ? "authorized" : "missing")\nmicrophone \(micStatus)\nopencode_key \(OpenCodeKey.load() == nil ? "missing" : "present")\nmodels \(modelsPresent ? "present" : "missing")\n".utf8))
+    FileHandle.standardOutput.write(Data("speech_route_check \(routes)\naccessibility \(AXIsProcessTrusted() ? "authorized" : "missing")\nmicrophone \(micStatus)\nopencode_key \(OpenCodeKey.load() == nil ? "missing" : "present")\nmodels \(modelsPresent ? "present" : "missing")\nspotter \(spotterPresent ? "present" : "missing")\n".utf8))
     exit(0)
 }
 
@@ -75,6 +80,36 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--transcribe" 
             let elapsed = ContinuousClock.now - started
             FileHandle.standardOutput.write(Data("elapsed_seconds \(elapsed.seconds)\n\(text)\n".utf8))
             box.code = text.isEmpty ? 2 : 0
+        } catch {
+            FileHandle.standardError.write(Data("\(error)\n".utf8))
+            box.code = 1
+        }
+        box.complete = true
+    }
+    while !box.complete {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    }
+    exit(box.code)
+}
+
+// Networked: the take's text goes to Jev, and to OpenCode if Jev asks for
+// layout. Runs the finished-take path on a WAV without pasting.
+if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--format" {
+    let path = CommandLine.arguments[2]
+    let box = TranscribeBox()
+    Task { @MainActor in
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            guard let decoded = WavPCM.decode(data),
+                  let samples = SpeechAudio.prepare(samples: decoded.samples, sampleRate: decoded.sampleRate) else {
+                throw SpeechGate.tooShort
+            }
+            let dictionary = VoiceStore().words
+            let take = try await ParakeetEngine.shared.transcribeTake(samples: samples, languageCode: SpokenLanguage.auto.code, dictionary: dictionary)
+            let outcome = await JevFormat.prepare(raw: take.text, dictionary: dictionary, heard: take.heard)
+            let heard = take.heard.map { "\($0.span) -> \($0.term)" }.joined(separator: "; ")
+            FileHandle.standardOutput.write(Data("raw \(take.text)\nheard \(heard.isEmpty ? "none" : heard)\nnote \(outcome.note ?? "none")\n\(outcome.text)\n".utf8))
+            box.code = outcome.text.isEmpty ? 2 : 0
         } catch {
             FileHandle.standardError.write(Data("\(error)\n".utf8))
             box.code = 1

@@ -6,19 +6,24 @@ public struct Take: Codable, Equatable, Identifiable, Sendable {
     public let rawTranscript: String
     public let durationSeconds: Double
     public var insertedText: String?
+    /// Dictionary terms the audio supported, kept so a later insert from
+    /// History asks Jev the same questions.
+    public var heardTerms: [HeardTerm]?
 
     public init(
         id: UUID,
         wavPath: String,
         rawTranscript: String,
         durationSeconds: Double,
-        insertedText: String? = nil
+        insertedText: String? = nil,
+        heardTerms: [HeardTerm]? = nil
     ) {
         self.id = id
         self.wavPath = wavPath
         self.rawTranscript = rawTranscript
         self.durationSeconds = durationSeconds
         self.insertedText = insertedText
+        self.heardTerms = heardTerms
     }
 }
 

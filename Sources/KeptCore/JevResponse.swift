@@ -7,6 +7,8 @@ public enum JevResponse {
         case invalidAnswers
     }
 
+    public static let minimumLayoutProbability = 0.5
+
     public static func parse(
         _ data: Data,
         candidates: [String: (entry: String, spans: [String])],
@@ -17,15 +19,13 @@ public enum JevResponse {
               !answers.isEmpty else {
             throw Failure.invalidAnswers
         }
-        let shape: SpokenShape
-        if let answer = answers["shape"] as? [String: Any],
-           let choice = answer["choice"] as? String,
-           let confidence = answer["confidence"] as? Double,
-           confidence >= SpeechFormat.minimumConfidence,
-           let accepted = SpokenShape(rawValue: choice) {
-            shape = accepted
-        } else {
-            shape = .prose
+        // A missed list costs more than a layout call whose words are checked,
+        // so layout needs only the larger share, not the confidence bar.
+        var layout = false
+        if let answer = answers["layout"] as? [String: Any],
+           let probabilities = answer["probabilities"] as? [String: Double],
+           let wanted = probabilities["layout"] {
+            layout = wanted >= minimumLayoutProbability
         }
         var replacements: [Replacement] = []
         for (id, candidate) in candidates {
@@ -44,6 +44,6 @@ public enum JevResponse {
                   meant >= Respell.minimumConfidence else { continue }
             respelled.append(candidate)
         }
-        return JevJudgment(shape: shape, replacements: replacements, respell: respelled)
+        return JevJudgment(layout: layout, replacements: replacements, respell: respelled)
     }
 }

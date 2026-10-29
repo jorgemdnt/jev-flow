@@ -31,6 +31,7 @@ final class Session {
 
     static let insertNeedsAccessibility = "Accessibility permission is required to insert. Text kept."
     static let keptNotPasted = "Kept this take and did not paste it."
+    static let leftOnClipboard = "Not inserted. The text is on the clipboard."
     static let caretMarkUnavailable = "Caret mark unavailable."
 
     @ObservationIgnored private let store: TakeStore
@@ -103,7 +104,11 @@ final class Session {
                 self?.noteRouteChange()
             }
         }
-        Task { await ParakeetEngine.shared.warmup() }
+        let terms = voice.words
+        Task {
+            await ParakeetEngine.shared.warmup()
+            await VocabularySpotter.shared.warmup(dictionary: terms)
+        }
         mic.warm()
         caret.onNote = { [weak self] note in
             self?.caretNote = note
@@ -436,9 +441,12 @@ final class Session {
                 return FocusedField.sameTarget(as: target) && EditDecision.matchesSelection(current, expected: selected)
             }, paste: { replacement in
                 guard !Task.isCancelled, self.holdGeneration == generation else { return false }
-                let pasted = FocusedAppPaste.paste(replacement)
+                let pasted = await FocusedAppPaste.paste(replacement)
                 KeptLog.edit.notice("replace: \(String(describing: pasted), privacy: .public)")
-                guard pasted == .pasted else { return false }
+                guard pasted == .pasted else {
+                    if pasted != .unread { FocusedAppPaste.leaveOnPasteboard(replacement) }
+                    return false
+                }
                 self.lastInsertedText = replacement
                 self.lastInsertLocation = nil
                 self.lastInsertLength = 0
@@ -734,12 +742,13 @@ final class Session {
             }
         }
         let transcript: String
+        let heard: [HeardTerm]
         do {
             if !recording {
                 status = "Transcribing…"
                 livePhase = .transcribing
             }
-            transcript = try await transcribe(wav)
+            (transcript, heard) = try await transcribeTake(wav)
         } catch {
             if SpeechAudio.isBufferRejection(error) {
                 try? FileManager.default.removeItem(at: wav)
@@ -752,7 +761,7 @@ final class Session {
             remember(id: id, wav: wav, transcript: "", duration: duration)
             return
         }
-        remember(id: id, wav: wav, transcript: transcript, duration: duration)
+        remember(id: id, wav: wav, transcript: transcript, duration: duration, heard: heard)
         KeptLog.capture.notice("take \(id.uuidString.prefix(8), privacy: .public): \(duration, format: .fixed(precision: 1))s audio, \(transcript.split(separator: " ").count) words")
         let decision = InsertDecision(transcript: transcript, durationSeconds: duration)
         let outcome: CleanupOutcome
@@ -761,7 +770,7 @@ final class Session {
                 status = "Formatting…"
                 livePhase = .cleaning
             }
-            outcome = await JevFormat.prepare(raw: transcript, dictionary: voice.words)
+            outcome = await JevFormat.prepare(raw: transcript, dictionary: voice.words, heard: heard)
         } else {
             outcome = .local("", note: "")
         }
@@ -780,6 +789,22 @@ final class Session {
         let data = try Data(contentsOf: wav)
         guard let decoded = WavPCM.decode(data) else { throw SpeechGate.tooShort }
         return try await transcribeSamples(decoded.samples, sampleRate: decoded.sampleRate)
+    }
+
+    /// The final transcript of a take, plus the dictionary terms its audio
+    /// supports. whisper-cli has no word spotter, so it hears none.
+    private func transcribeTake(_ wav: URL) async throws -> (String, [HeardTerm]) {
+        let data = try Data(contentsOf: wav)
+        guard let decoded = WavPCM.decode(data),
+              let prepared = SpeechAudio.prepare(samples: decoded.samples, sampleRate: decoded.sampleRate) else {
+            throw SpeechGate.tooShort
+        }
+        let code = LanguageStore.currentCode()
+        guard SpeechRoute.engine(for: code) == .parakeetV3 else {
+            return (try await transcribeSamples(decoded.samples, sampleRate: decoded.sampleRate), [])
+        }
+        let take = try await ParakeetEngine.shared.transcribeTake(samples: prepared, languageCode: code, dictionary: voice.words)
+        return (take.text, take.heard)
     }
 
     private func transcribePCM(_ pcm: Data, sampleRate: Double) async throws -> String {
@@ -830,11 +855,24 @@ final class Session {
             return idle
         case .accessibilityMissing:
             return Self.insertNeedsAccessibility
+        case .unread:
+            return notInserted(text, body: "Press ⌘V in the field to paste it. It is also in History.")
         case .wouldReplaceSelection:
-            return "Could not insert without replacing a selection. Text kept."
+            return notInserted(text, body: "A selection was in the way. Press ⌘V where you want it.")
         case .failed:
-            return "Could not insert. Text kept."
+            return notInserted(text, body: "Press ⌘V in the field to paste it. It is also in History.")
         }
+    }
+
+    /// A take that did not land stays one Command-V away, and the card says
+    /// so. The finished take resets the card, so the notice waits for that.
+    private func notInserted(_ text: String, body: String) -> String {
+        FocusedAppPaste.leaveOnPasteboard(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        Task { @MainActor [weak self] in
+            guard let self, !self.recording, !self.held else { return }
+            self.showNotice("Not inserted. Text copied.", body)
+        }
+        return Self.leftOnClipboard
     }
 
     private func place(_ text: String, typeSeparator: Bool = false) async -> PlaceResult {
@@ -842,35 +880,40 @@ final class Session {
         case .selectionCouldNotCollapse:
             return .wouldReplaceSelection
         case .location(let at):
-            return pasteAtCaret(text, typeSeparator: typeSeparator, location: at)
+            return await pasteAtCaret(text, typeSeparator: typeSeparator, location: at)
         case .unavailable:
-            let selected: String?
-            if let text = FocusedField.selectedText() {
-                selected = text
-            } else {
-                selected = await FocusedAppPaste.copySelection()
-            }
-            if let selected, !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // No Command-C probe here: with nothing selected, VS Code and Cursor
+            // copy the whole line, and a terminal copies a stale highlight, which
+            // looked like a selection and blocked the paste. A real selection at
+            // Right Option starts an edit instead of a take.
+            if let selected = FocusedField.selectedText(),
+               !selected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return .wouldReplaceSelection
             }
-            return pasteAtCaret(text, typeSeparator: typeSeparator, location: nil)
+            return await pasteAtCaret(text, typeSeparator: typeSeparator, location: nil)
         }
     }
 
-    private func pasteAtCaret(_ text: String, typeSeparator: Bool, location: Int?) -> PlaceResult {
-        let attempt = PasteActions.perform(
+    private func pasteAtCaret(_ text: String, typeSeparator: Bool, location: Int?) async -> PlaceResult {
+        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
+        let started = ContinuousClock.now
+        let attempt = await PasteActions.perform(
             text: text,
             leading: typeSeparator,
             typeSpace: FocusedAppPaste.typeSpace,
-            paste: FocusedAppPaste.paste,
+            paste: { await FocusedAppPaste.paste($0) },
             didPaste: { $0 == .pasted },
             afterPaste: { Self.scheduleTrailingSpace(for: text) }
         )
+        let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
+        KeptLog.capture.notice("insert into \(app, privacy: .public): \(String(describing: attempt.value), privacy: .public) after \(ms) ms, caret \(location == nil ? "unknown" : "known", privacy: .public)")
         switch attempt.value {
         case .pasted:
             lastInsertLocation = location.map { $0 + (attempt.leadingTyped ? 1 : 0) }
             lastInsertLength = text.count
             return .placed(text)
+        case .unread:
+            return .unread
         case .accessibilityMissing:
             return .accessibilityMissing
         case .failed:
@@ -944,7 +987,7 @@ final class Session {
         let note: String?
         if formatted {
             status = "Formatting…"
-            let outcome = await JevFormat.prepare(raw: take.rawTranscript, dictionary: voice.words)
+            let outcome = await JevFormat.prepare(raw: take.rawTranscript, dictionary: voice.words, heard: take.heardTerms ?? [])
             text = outcome.text
             note = outcome.note
         } else {
@@ -963,6 +1006,8 @@ final class Session {
             status = (note?.isEmpty == false) ? note! : "Hold Right Option to talk"
         case .accessibilityMissing:
             status = Self.insertNeedsAccessibility
+        case .unread:
+            status = Self.leftOnClipboard
         case .wouldReplaceSelection:
             status = "Could not insert without replacing a selection. Text kept."
         case .failed:
@@ -989,6 +1034,8 @@ final class Session {
             status = "Hold Right Option to talk"
         case .accessibilityMissing:
             status = Self.insertNeedsAccessibility
+        case .unread:
+            status = Self.leftOnClipboard
         case .wouldReplaceSelection:
             status = "Could not insert without replacing a selection. Text kept."
         case .failed:
@@ -1015,8 +1062,8 @@ final class Session {
         return text
     }
 
-    private func remember(id: UUID, wav: URL, transcript: String, duration: Double) {
-        let take = Take(id: id, wavPath: wav.path, rawTranscript: transcript, durationSeconds: duration)
+    private func remember(id: UUID, wav: URL, transcript: String, duration: Double, heard: [HeardTerm] = []) {
+        let take = Take(id: id, wavPath: wav.path, rawTranscript: transcript, durationSeconds: duration, heardTerms: heard.isEmpty ? nil : heard)
         takes.insert(take, at: 0)
         try? store.save(takes)
     }
@@ -1029,6 +1076,8 @@ final class Session {
 
 private enum PlaceResult {
     case placed(String)
+    /// Command-V went out and nothing read the text. It is on the pasteboard.
+    case unread
     case accessibilityMissing
     case wouldReplaceSelection
     case failed

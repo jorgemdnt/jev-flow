@@ -14,6 +14,10 @@ public enum SpeechRoute {
     /// CoreML bundle folder. Weights are NVIDIA `parakeet-tdt-0.6b-v3`, CC-BY-4.0.
     public static let parakeetModelFolder = "parakeet-tdt-0.6b-v3-coreml"
 
+    /// CoreML bundle folder for the dictionary word spotter. Weights are NVIDIA
+    /// `parakeet-ctc-110m`, CC-BY-4.0, converted by FluidInference.
+    public static let ctcModelFolder = "parakeet-ctc-110m-coreml"
+
     /// Model card: https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
     public static let parakeetCodes: Set<String> = [
         "bg", "hr", "cs", "da", "nl", "en", "et", "fi", "fr", "de", "el",
