@@ -35,7 +35,7 @@ enum OpenCodeClient {
         instruction: String,
         key: String?,
         matchesTarget: @MainActor () async -> Bool,
-        paste: @MainActor (String) -> Bool
+        paste: @MainActor (String) async -> Bool
     ) async -> EditOutcome {
         let outcome = await EditService.run(
             selection: text, instruction: instruction, key: key,
@@ -51,5 +51,43 @@ enum OpenCodeClient {
         )
         KeptLog.edit.notice("edit outcome \(String(describing: outcome), privacy: .public)")
         return outcome
+    }
+
+    /// Total budget for laying out a take, including a slow first byte. A
+    /// stalled model pastes the text without layout.
+    static let layoutBudget: Duration = .seconds(6)
+
+    static func layout(text: String, key: String?) async -> LayoutOutcome {
+        let started = ContinuousClock.now
+        let outcome = await Layout.run(
+            text: text, key: key,
+            endpoint: endpoint, model: model, userAgent: userAgent,
+            timeout: TimeInterval(layoutBudget / .seconds(1)),
+            send: { request in
+                try await withDeadline(layoutBudget) {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    await MainActor.run { KeyStatus.shared.openCode = KeyHealth(status: status) }
+                    KeptLog.format.notice("OpenCode layout HTTP \(status), response \(data.count) bytes")
+                    return (data, status)
+                }
+            }
+        )
+        let ms = Int((ContinuousClock.now - started) / .milliseconds(1))
+        KeptLog.format.notice("layout \(outcome.label, privacy: .public) in \(ms) ms, \(text.split(separator: " ").count) words")
+        return outcome
+    }
+}
+
+/// Runs `work` and throws a timeout when it outlives `limit`.
+func withDeadline<T: Sendable>(_ limit: Duration, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask { try await work() }
+        group.addTask {
+            try await Task.sleep(for: limit)
+            throw URLError(.timedOut)
+        }
+        defer { group.cancelAll() }
+        return try await group.next()!
     }
 }

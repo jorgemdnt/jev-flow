@@ -27,7 +27,7 @@ Hold Right Option to talk. A card under the menu-bar icon shows the words as the
 
 The first launch asks which language you speak. Auto detects it. Auto and a pinned European language go to Parakeet. A pinned language outside that set is passed to whisper-cli. Omitting the language flag makes whisper-cli assume English, so the fallback always passes it.
 
-The final text is formatted by Jev. Jev chooses whether the take is prose, a list, or numbered, and which dictionary span you meant. Code applies that and keeps the words. A standalone uh is a hesitation and is removed. um stays, because in Portuguese it is a word. A spoken number that includes hundred, thousand, million, or a tens-and-ones pair becomes digits. five thousand forty-nine is 5049. one two three stays words, and a lone five stays five. we are or pee are, right after ship and before that number, is PR. shoot before PR is ship. A spoken "list of" is the list: the words before it stay prose, and the words after it are the items. Commas in a count such as 1, 2, 3 are not item breaks. It does not rewrite a word the recognizer heard, except a misspelling or a missing accent. nao is não. A unique name in the dictionary pastes as that @handle. Pedro and Gabriel need the surname. The TypeSafe key is the one saved in Settings, or `TYPESAFE_API_KEY` in the environment. The app stores it in a file only this user can read, under `~/Library/Application Support/Kept`. It does not use the login keychain, so a rebuild does not ask for the login password. It does not use the data protection keychain: that store needs a restricted entitlement, and an ad-hoc signature cannot carry it. The key is not copied into the repo. If that call fails, the local text is inserted.
+The final text is formatted locally, with Jev as the judge. Jev decides whether the take needs layout (a list, steps, or paragraphs) and which dictionary span you meant. Code applies the spans and keeps the words. A short take with no layout cue, dictionary span, or sound-alike has nothing for Jev to judge and pastes without a network call. A take Jev says needs layout goes to DeepSeek V4.1 Flash on OpenCode, with the edit key, which may only add line breaks, list markers, punctuation, and capitals. Code pastes its answer only when every word survives in order. Only a spoken layout command (bullet point, new line, new paragraph, next item), an item number that became the list number, and an and or then before a new item may go. Anything else, a missing key, or no answer within six seconds pastes the text without layout. A standalone uh is a hesitation and is removed. um stays, because in Portuguese it is a word. A spoken number that includes hundred, thousand, million, or a tens-and-ones pair becomes digits. five thousand forty-nine is 5049. one two three stays words, and a lone five stays five. we are or pee are, right after ship and before that number, is PR. shoot before PR is ship. "list of" is a layout cue for Jev, not a rule that splits words. Commas in a count such as 1, 2, 3 are not item breaks. It does not rewrite a word the recognizer heard, except a misspelling or a missing accent. nao is não. A unique name in the dictionary pastes as that @handle. Pedro and Gabriel need the surname. The TypeSafe key is the one saved in Settings, or `TYPESAFE_API_KEY` in the environment. The app stores it in a file only this user can read, under `~/Library/Application Support/Kept`. It does not use the login keychain, so a rebuild does not ask for the login password. It does not use the data protection keychain: that store needs a restricted entitlement, and an ad-hoc signature cannot carry it. The key is not copied into the repo. If that call fails, the local text is inserted.
 
 A mark sits on the focused app's Accessibility caret while recording and while transcribing. If Accessibility is missing, say so in the menu. Do not use a mark near the mouse instead.
 
@@ -35,7 +35,7 @@ Audio is kept until the user dismisses that take. A short transcript on a long t
 
 ## Rules the formatter must keep
 
-These are tests, not vibes. The formatter is a pure function. It is not a model.
+These are tests, not vibes. The local formatter is a pure function. It is not a model. The layout model cannot break these rules either: code rejects any layout that drops, adds, or changes a word.
 
 1. A numbered list keeps the spoken start. "5. alpha / 6. beta" stays 5, 6. Never rewrite it to 1, 2.
 2. Do not map uncommon words onto common ones. Seed dictionary includes `auth`. A later whisper prompt may bias the recognizer. The formatter itself must not rewrite `auth` to `off`.
@@ -53,7 +53,7 @@ Parakeet word timestamps stay on. The transcript is those words joined with spac
 
 ## Insert
 
-Save the pasteboard, paste the accepted text into the focused app with Command-V, restore the pasteboard. Accessibility permission is required. If it is missing, say so in the menu. Do not silently drop the text.
+Save the pasteboard, offer the accepted text on it, and press Command-V in the focused app. The text is handed over only when an app reads it, and that read is the proof the paste landed. Restore the saved pasteboard after the read. If nothing reads it within two seconds, the take was not inserted: leave the text on the pasteboard, say so on the card ("Not inserted. Text copied."), and keep the take in History without marking it inserted. Mark the offered text transient so clipboard managers do not record it or count as the read. With no Accessibility caret, check the Accessibility selection only. Do not press Command-C to probe: editors copy the whole line when nothing is selected. Accessibility permission is required. If it is missing, say so in the menu. Do not silently drop the text.
 
 ## Layout
 
@@ -68,4 +68,4 @@ Save the pasteboard, paste the accepted text into the focused app with Command-V
 
 ## Out of scope
 
-iOS, Windows, accounts, billing, a website, cloud STT, an LLM cleanup pass, a meeting notetaker, rewriting the user's existing Wispr history.
+iOS, Windows, accounts, billing, a website, cloud STT, an LLM pass that rewrites words, a meeting notetaker, rewriting the user's existing Wispr history.

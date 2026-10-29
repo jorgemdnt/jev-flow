@@ -1,11 +1,5 @@
 import Foundation
 
-public enum SpokenShape: String, Equatable, Sendable {
-    case prose
-    case list
-    case numbered
-}
-
 public struct Replacement: Equatable, Sendable {
     public let span: String
     public let word: String
@@ -17,25 +11,15 @@ public struct Replacement: Equatable, Sendable {
 }
 
 public enum SpeechFormat {
-    /// A format change is visible. Below this, leave the take as prose.
+    /// A Jev answer must be at least this sure before code acts on it.
     public static let minimumConfidence = 0.7
 
-    /// Code renders. The model only chose the shape and the spans.
-    public static func render(_ transcript: String, shape: SpokenShape, replacements: [Replacement], dictionary: [String] = []) -> String {
+    /// Local prose: hesitations, corrections, numbers, dictionary words and the
+    /// spans Jev chose. Layout is not decided here.
+    public static func render(_ transcript: String, replacements: [Replacement], dictionary: [String] = []) -> String {
         let corrected = Formatter.format(transcript)
         let named = applyDictionary(dictionary, to: corrected)
-        let replaced = apply(replacements, to: named)
-        if let listed = spokenList(replaced) {
-            return listed
-        }
-        switch shape {
-        case .prose, .numbered:
-            return Formatter.finished(replaced)
-        case .list:
-            let items = listItems(in: replaced)
-            guard items.count >= 2, !isCountSplit(items) else { return Formatter.finished(replaced) }
-            return bullets(items)
-        }
+        return Formatter.finished(apply(replacements, to: named))
     }
 
     /// Spans code is willing to replace. Jev picks among these. It cannot invent one.
@@ -128,77 +112,6 @@ public enum SpeechFormat {
             }
         }
         return nil
-    }
-
-    static func listItems(in text: String) -> [String] {
-        let normalized = text.replacingOccurrences(of: ", and ", with: " and ")
-        return normalized
-            .components(separatedBy: " and ")
-            .flatMap { $0.components(separatedBy: ", ") }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    /// "list of banana pineapple" is the list. Commas in "1, 2, 3" are a count, not items.
-    static func spokenList(_ text: String) -> String? {
-        guard let cue = lastCue(in: text) else { return nil }
-        let preface = String(text[..<cue.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let tail = String(text[cue.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        let items = tailItems(in: tail)
-        guard items.count >= 2 else { return nil }
-        let bullets = bullets(items)
-        guard !preface.isEmpty else { return bullets }
-        return Formatter.streaming(preface) + "\n" + bullets
-    }
-
-    static func isCountSplit(_ items: [String]) -> Bool {
-        items.contains { isCountToken($0) }
-    }
-
-    private static func bullets(_ items: [String]) -> String {
-        items.map { "• \(capitalizeItem($0))" }.joined(separator: "\n")
-    }
-
-    private static func tailItems(in tail: String) -> [String] {
-        let trimmed = tail.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-        let separated = listItems(in: trimmed).map(cleanItem).filter { !$0.isEmpty }
-        if separated.count >= 2, !separated.allSatisfy(isCountToken) { return separated }
-        let words = trimmed.split(whereSeparator: \.isWhitespace).map { cleanItem(String($0)) }.filter { !$0.isEmpty }
-        guard words.count >= 2, !words.allSatisfy(isCountToken) else { return [] }
-        return words
-    }
-
-    private static func lastCue(in text: String) -> Range<String.Index>? {
-        var found: Range<String.Index>?
-        var search = text.startIndex
-        while let range = text.range(
-            of: #"(?i)(?<![A-Za-z])list of(?![A-Za-z])"#,
-            options: .regularExpression,
-            range: search..<text.endIndex
-        ) {
-            found = range
-            search = range.upperBound
-        }
-        return found
-    }
-
-    private static func cleanItem(_ text: String) -> String {
-        text.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
-    }
-
-    private static func isCountToken(_ text: String) -> Bool {
-        let bare = cleanItem(text).lowercased()
-        if bare.isEmpty { return false }
-        if Int(bare) != nil { return true }
-        return ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"].contains(bare)
-    }
-
-    private static func capitalizeItem(_ text: String) -> String {
-        guard let index = text.firstIndex(where: { !$0.isWhitespace }) else { return text }
-        let character = text[index]
-        guard character.isLetter, character.isLowercase else { return text }
-        return text.replacingCharacters(in: index...index, with: String(character).uppercased())
     }
 
     private static func words(in text: String) -> [String] {

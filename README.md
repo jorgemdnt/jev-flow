@@ -12,7 +12,7 @@ Your speech stays on this Mac. [NVIDIA Parakeet TDT 0.6B v3](https://huggingface
 
 Phonon-2 was tested on this Mac's saved takes and did not win. English stays on v3, as does Auto; no English-only language detector or second model is added. See the [benchmark and routing decision](docs/phonon-2-benchmark.md).
 
-When you release the key, [Jev](https://typesafe.ai) decides how the text should look. It can come out as prose, a list, or a numbered list. Jev also picks which dictionary word you meant. Every word you said stays in the text. If the Jev call fails, JevFlow inserts the local transcript instead.
+When you release the key, a short take with nothing to correct pastes straight away. For the rest, [Jev](https://typesafe.ai) decides whether the text needs layout (a list, steps, or paragraphs) and which dictionary word you meant. Only a take that needs layout goes to DeepSeek V4.1 Flash on OpenCode, using the same key as edit mode. JevFlow pastes that layout only if every word you said is still there, in order. If any call fails, JevFlow inserts the local text instead.
 
 ## TypeSafe key
 

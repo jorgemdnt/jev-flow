@@ -3,9 +3,9 @@ import Testing
 
 private enum PasteStatus { case pasted, failed }
 
-@Test func aPasteTypesTheNeededGapThenBodyThenTrailingSpace() {
+@MainActor @Test func aPasteTypesTheNeededGapThenBodyThenTrailingSpace() async {
     var events: [String] = []
-    let attempt: PasteAttempt<PasteStatus> = PasteActions.perform(
+    let attempt: PasteAttempt<PasteStatus> = await PasteActions.perform(
         text: "Next. ", leading: true,
         typeSpace: { events.append("space"); return true },
         paste: { events.append("paste:\($0)"); return PasteStatus.pasted },
@@ -17,9 +17,9 @@ private enum PasteStatus { case pasted, failed }
     #expect(events == ["space", "paste:Next.", "trailing space"])
 }
 
-@Test func anUnknownCaretOrAFailedSeparatorNeverAddsALeadingPasteSpace() {
+@MainActor @Test func anUnknownCaretOrAFailedSeparatorNeverAddsALeadingPasteSpace() async {
     var events: [String] = []
-    let attempt: PasteAttempt<PasteStatus> = PasteActions.perform(
+    let attempt: PasteAttempt<PasteStatus> = await PasteActions.perform(
         text: "Next. ", leading: true,
         typeSpace: { events.append("failed separator"); return false },
         paste: { events.append("paste:\($0)"); return PasteStatus.pasted },
@@ -29,7 +29,7 @@ private enum PasteStatus { case pasted, failed }
     #expect(!attempt.leadingTyped)
     #expect(events == ["failed separator", "paste:Next.", "trailing space"])
     events.removeAll()
-    _ = PasteActions.perform(
+    _ = await PasteActions.perform(
         text: "Again. ", leading: false,
         typeSpace: { events.append("unexpected separator"); return true },
         paste: { events.append("paste:\($0)"); return PasteStatus.pasted },
@@ -39,12 +39,12 @@ private enum PasteStatus { case pasted, failed }
     #expect(events == ["paste:Again.", "trailing space"])
 }
 
-@Test(arguments: [FieldJoin.needsSpace, .separated, .unknown])
-func aLeadingWhitespaceTakeUsesTheNormalizedBodyToDecideTheTypedGap(_ field: FieldJoin) {
+@MainActor @Test(arguments: [FieldJoin.needsSpace, .separated, .unknown])
+func aLeadingWhitespaceTakeUsesTheNormalizedBodyToDecideTheTypedGap(_ field: FieldJoin) async {
     let submitted = TakeJoin.submission(previous: "Done. ", next: "  Hello.  ", field: field)
     let leading = TakeJoin.needsSeparator(previous: "Done. ", next: "  Hello.  ", field: field)
     var events: [String] = []
-    let attempt = PasteActions.perform(
+    let attempt = await PasteActions.perform(
         text: submitted, leading: leading,
         typeSpace: { events.append("gap"); return true },
         paste: { events.append("paste:\($0)"); return true },
@@ -60,9 +60,9 @@ func aLeadingWhitespaceTakeUsesTheNormalizedBodyToDecideTheTypedGap(_ field: Fie
     #expect(!TakeJoin.needsSeparator(previous: "Done.", next: " \n ", field: field))
 }
 
-@Test func aFailedPasteDoesNotTypeATrailingSpace() {
+@MainActor @Test func aFailedPasteDoesNotTypeATrailingSpace() async {
     var events: [String] = []
-    let attempt: PasteAttempt<PasteStatus> = PasteActions.perform(
+    let attempt: PasteAttempt<PasteStatus> = await PasteActions.perform(
         text: "Next. ", leading: false,
         typeSpace: { events.append("unexpected separator"); return true },
         paste: { events.append("paste:\($0)"); return PasteStatus.failed },
