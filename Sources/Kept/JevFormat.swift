@@ -74,13 +74,16 @@ enum JevFormat {
             guard let options = spans[entry], !options.isEmpty else { continue }
             let id = "word_\(index)"
             wordIDs[id] = (entry, options)
-            var criteria: [String: String] = ["none": "None of these spans are the speaker saying \(entry)."]
+            // Asked only which span is the word, Jev reads a misheard term as
+            // written ("Jabflow" stays Jabflow). Naming the recognizer as the
+            // source of the error is what lets it pick the span.
+            var criteria: [String: String] = ["none": "Each of these spans means what it says. None is \(entry) misheard."]
             for span in options {
-                criteria[span] = "This span is the speaker saying \(entry), including a mishearing."
+                criteria[span] = "\"\(span)\" is the speech recognizer mishearing \(entry)."
             }
             questions[id] = [
                 "type": "choice",
-                "instructions": "Which span is the speaker saying \(entry)? Choose none if none of them are.",
+                "instructions": "The transcript came from speech recognition, which often mishears the speaker's own names and product terms as similar-sounding words or as words that do not exist. \(entry) is one of the speaker's terms. Does one of these spans stand for \(entry)? Judge by sound and by whether the span makes sense as written.",
                 "criteria": criteria,
             ]
         }

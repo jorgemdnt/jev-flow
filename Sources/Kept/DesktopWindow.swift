@@ -187,7 +187,6 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
                 noticeTitle: session.noticeTitle,
                 noticeBody: session.noticeBody
             )
-            liveHost?.rootView = LiveCard(model: liveModel)
             showLive()
         } else {
             hideLive()
@@ -239,8 +238,15 @@ final class KeptChrome: NSObject, NSMenuDelegate, NSWindowDelegate {
         panel.ignoresMouseEvents = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.onClick = { [weak self] in self?.cancelLive() }
-        panel.contentView = host
+        // As a window's content view, NSHostingView also resizes the window
+        // during layout. On macOS 27 that loop raised "too many Update
+        // Constraints passes" and killed the app mid-hold. A plain container
+        // keeps the panel frame owned by showLive alone.
+        let container = NSView(frame: panel.contentRect(forFrameRect: panel.frame))
+        host.frame = container.bounds
         host.autoresizingMask = [.width, .height]
+        container.addSubview(host)
+        panel.contentView = container
         livePanel = panel
         return panel
     }

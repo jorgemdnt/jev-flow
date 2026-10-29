@@ -35,8 +35,10 @@ public enum SpeechFormat {
             guard limit > 0 else { continue }
             for size in 1...limit {
                 for index in 0...(tokens.count - size) {
+                    // A replaced span must not take the sentence's period with it.
                     let span = tokens[index..<(index + size)].joined(separator: " ")
-                    guard resembles(span, trimmed) else { continue }
+                        .trimmingCharacters(in: edgePunctuation)
+                    guard !span.isEmpty, resembles(span, trimmed) else { continue }
                     if !spans.contains(where: { $0.caseInsensitiveCompare(span) == .orderedSame }) {
                         spans.append(span)
                     }
@@ -113,6 +115,8 @@ public enum SpeechFormat {
         }
         return nil
     }
+
+    private static let edgePunctuation = CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "@"))
 
     private static func words(in text: String) -> [String] {
         text.split(whereSeparator: \.isWhitespace).map(String.init)
