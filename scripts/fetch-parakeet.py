@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Download the Parakeet v3 files JevFlow runs, not the whole Hub repo."""
+"""Download the Parakeet files JevFlow runs, not the whole Hub repo.
+
+usage: fetch-parakeet.py <cache-dir> [tdt|ctc]
+
+tdt (default) is the v3 recognizer. ctc is the 110M word spotter that finds
+dictionary terms in the audio.
+"""
 
 import json
 import os
@@ -7,31 +13,37 @@ import subprocess
 import sys
 import urllib.request
 
-REPO = "FluidInference/parakeet-tdt-0.6b-v3-coreml"
-TREE = f"https://huggingface.co/api/models/{REPO}/tree/main?recursive=1"
-PREFIXES = (
-    "Preprocessor.mlmodelc/",
-    "Encoder.mlmodelc/",
-    "Decoder.mlmodelc/",
-    "JointDecisionv3.mlmodelc/",
-    "parakeet_vocab.json",
-)
-
-
-def needed(path):
-    return path == "parakeet_vocab.json" or any(path.startswith(prefix) for prefix in PREFIXES[:-1])
+MODELS = {
+    "tdt": {
+        "repo": "FluidInference/parakeet-tdt-0.6b-v3-coreml",
+        "folders": ("Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"),
+        "files": ("parakeet_vocab.json",),
+    },
+    "ctc": {
+        "repo": "FluidInference/parakeet-ctc-110m-coreml",
+        "folders": ("MelSpectrogram.mlmodelc", "AudioEncoder.mlmodelc"),
+        "files": ("tokenizer.json", "vocab.json", "config.json"),
+    },
+}
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: fetch-parakeet.py <cache-dir>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] not in MODELS):
+        print("usage: fetch-parakeet.py <cache-dir> [tdt|ctc]", file=sys.stderr)
         return 2
     dest = os.path.abspath(sys.argv[1])
+    model = MODELS[sys.argv[2] if len(sys.argv) == 3 else "tdt"]
+    repo = model["repo"]
+
+    def needed(path):
+        return path in model["files"] or any(path.startswith(folder + "/") for folder in model["folders"])
+
     os.makedirs(dest, exist_ok=True)
-    with urllib.request.urlopen(TREE, timeout=60) as response:
+    tree = f"https://huggingface.co/api/models/{repo}/tree/main?recursive=1"
+    with urllib.request.urlopen(tree, timeout=60) as response:
         listing = json.load(response)
     files = [item for item in listing if item.get("type") != "directory" and needed(item.get("path", ""))]
-    if len(files) < 5:
+    if len(files) < len(model["folders"]) + len(model["files"]):
         print(f"Hub listing did not include the runtime files ({len(files)})", file=sys.stderr)
         return 1
     total = sum(item.get("size") or 0 for item in files)
@@ -43,7 +55,7 @@ def main():
         if os.path.isfile(target) and os.path.getsize(target) == size:
             continue
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        url = f"https://huggingface.co/{REPO}/resolve/main/{path}"
+        url = f"https://huggingface.co/{repo}/resolve/main/{path}"
         partial = target + ".partial"
         print(f"fetch {path}")
         subprocess.run(
@@ -55,14 +67,15 @@ def main():
         if size and got != size:
             print(f"{path} is {got} bytes, Hub says {size}", file=sys.stderr)
             return 1
-    for name in ("Preprocessor.mlmodelc", "Encoder.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"):
+    for name in model["folders"]:
         if not os.path.isdir(os.path.join(dest, name)):
             print(f"missing {name}", file=sys.stderr)
             return 1
-    vocab = os.path.join(dest, "parakeet_vocab.json")
-    if not os.path.isfile(vocab) or os.path.getsize(vocab) < 1000:
-        print("missing parakeet_vocab.json", file=sys.stderr)
-        return 1
+    for name in model["files"]:
+        target = os.path.join(dest, name)
+        if not os.path.isfile(target) or os.path.getsize(target) == 0:
+            print(f"missing {name}", file=sys.stderr)
+            return 1
     print(dest)
     return 0
 

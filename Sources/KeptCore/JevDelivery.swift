@@ -30,6 +30,7 @@ public enum JevDelivery {
     public static func prepare(
         raw: String,
         dictionary: [String],
+        heard: [HeardTerm] = [],
         key: String?,
         judge: (String, String) async throws -> JevJudgment,
         layout: (String) async -> LayoutOutcome
@@ -37,7 +38,7 @@ public enum JevDelivery {
         let local = SpeechFormat.render(raw, replacements: [], dictionary: dictionary)
         let corrected = Formatter.format(raw).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !corrected.isEmpty else { return JevResult(text: local, note: "") }
-        guard worthAsking(raw: raw, corrected: corrected, dictionary: dictionary) else {
+        guard worthAsking(raw: raw, corrected: corrected, heard: heard) else {
             return JevResult(text: local, note: nil)
         }
         guard let key else { return JevResult(text: local, note: "No TypeSafe key. Inserted local text.") }
@@ -67,11 +68,11 @@ public enum JevDelivery {
         }
     }
 
-    /// A short take with no dictionary span, sound-alike, or layout cue has
+    /// A short take with no heard term, sound-alike, or layout cue has
     /// nothing for Jev to judge. It pastes without a network call.
-    public static func worthAsking(raw: String, corrected: String, dictionary: [String]) -> Bool {
+    public static func worthAsking(raw: String, corrected: String, heard: [HeardTerm]) -> Bool {
         Layout.mightNeed(corrected)
-            || !SpeechFormat.candidates(in: corrected, entries: dictionary).isEmpty
+            || !HeardTerm.questions(heard, in: corrected).isEmpty
             || !Respell.candidates(in: raw).isEmpty
     }
 }

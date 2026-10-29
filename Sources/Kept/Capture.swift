@@ -104,7 +104,11 @@ final class Session {
                 self?.noteRouteChange()
             }
         }
-        Task { await ParakeetEngine.shared.warmup() }
+        let terms = voice.words
+        Task {
+            await ParakeetEngine.shared.warmup()
+            await VocabularySpotter.shared.warmup(dictionary: terms)
+        }
         mic.warm()
         caret.onNote = { [weak self] note in
             self?.caretNote = note
@@ -738,12 +742,13 @@ final class Session {
             }
         }
         let transcript: String
+        let heard: [HeardTerm]
         do {
             if !recording {
                 status = "Transcribing…"
                 livePhase = .transcribing
             }
-            transcript = try await transcribe(wav)
+            (transcript, heard) = try await transcribeTake(wav)
         } catch {
             if SpeechAudio.isBufferRejection(error) {
                 try? FileManager.default.removeItem(at: wav)
@@ -756,7 +761,7 @@ final class Session {
             remember(id: id, wav: wav, transcript: "", duration: duration)
             return
         }
-        remember(id: id, wav: wav, transcript: transcript, duration: duration)
+        remember(id: id, wav: wav, transcript: transcript, duration: duration, heard: heard)
         KeptLog.capture.notice("take \(id.uuidString.prefix(8), privacy: .public): \(duration, format: .fixed(precision: 1))s audio, \(transcript.split(separator: " ").count) words")
         let decision = InsertDecision(transcript: transcript, durationSeconds: duration)
         let outcome: CleanupOutcome
@@ -765,7 +770,7 @@ final class Session {
                 status = "Formatting…"
                 livePhase = .cleaning
             }
-            outcome = await JevFormat.prepare(raw: transcript, dictionary: voice.words)
+            outcome = await JevFormat.prepare(raw: transcript, dictionary: voice.words, heard: heard)
         } else {
             outcome = .local("", note: "")
         }
@@ -784,6 +789,22 @@ final class Session {
         let data = try Data(contentsOf: wav)
         guard let decoded = WavPCM.decode(data) else { throw SpeechGate.tooShort }
         return try await transcribeSamples(decoded.samples, sampleRate: decoded.sampleRate)
+    }
+
+    /// The final transcript of a take, plus the dictionary terms its audio
+    /// supports. whisper-cli has no word spotter, so it hears none.
+    private func transcribeTake(_ wav: URL) async throws -> (String, [HeardTerm]) {
+        let data = try Data(contentsOf: wav)
+        guard let decoded = WavPCM.decode(data),
+              let prepared = SpeechAudio.prepare(samples: decoded.samples, sampleRate: decoded.sampleRate) else {
+            throw SpeechGate.tooShort
+        }
+        let code = LanguageStore.currentCode()
+        guard SpeechRoute.engine(for: code) == .parakeetV3 else {
+            return (try await transcribeSamples(decoded.samples, sampleRate: decoded.sampleRate), [])
+        }
+        let take = try await ParakeetEngine.shared.transcribeTake(samples: prepared, languageCode: code, dictionary: voice.words)
+        return (take.text, take.heard)
     }
 
     private func transcribePCM(_ pcm: Data, sampleRate: Double) async throws -> String {
@@ -966,7 +987,7 @@ final class Session {
         let note: String?
         if formatted {
             status = "Formatting…"
-            let outcome = await JevFormat.prepare(raw: take.rawTranscript, dictionary: voice.words)
+            let outcome = await JevFormat.prepare(raw: take.rawTranscript, dictionary: voice.words, heard: take.heardTerms ?? [])
             text = outcome.text
             note = outcome.note
         } else {
@@ -1041,8 +1062,8 @@ final class Session {
         return text
     }
 
-    private func remember(id: UUID, wav: URL, transcript: String, duration: Double) {
-        let take = Take(id: id, wavPath: wav.path, rawTranscript: transcript, durationSeconds: duration)
+    private func remember(id: UUID, wav: URL, transcript: String, duration: Double, heard: [HeardTerm] = []) {
+        let take = Take(id: id, wavPath: wav.path, rawTranscript: transcript, durationSeconds: duration, heardTerms: heard.isEmpty ? nil : heard)
         takes.insert(take, at: 0)
         try? store.save(takes)
     }

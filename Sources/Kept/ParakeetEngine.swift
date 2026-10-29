@@ -88,6 +88,20 @@ actor ParakeetEngine {
 
     /// `samples` are already 16 kHz. A shorter buffer is not sent to the model.
     func transcribe(samples: [Float], languageCode: String) async throws -> String {
+        try await recognize(samples: samples, languageCode: languageCode).text
+    }
+
+    /// A finished take: the transcript, plus the dictionary terms the audio
+    /// supports. Partials skip the spotter.
+    func transcribeTake(samples: [Float], languageCode: String, dictionary: [String]) async throws -> (text: String, heard: [HeardTerm]) {
+        let (text, result) = try await recognize(samples: samples, languageCode: languageCode)
+        let heard = await VocabularySpotter.shared.heard(
+            samples: samples, transcript: result.text,
+            tokenTimings: result.tokenTimings ?? [], dictionary: dictionary)
+        return (text, heard)
+    }
+
+    private func recognize(samples: [Float], languageCode: String) async throws -> (text: String, result: ASRResult) {
         guard samples.count >= SpeechAudio.minimumSamples else { throw SpeechGate.tooShort }
         let manager = try await ready()
         var state = TdtDecoderState.make()
@@ -99,7 +113,7 @@ actor ParakeetEngine {
         let words = buildWordTimings(from: result.tokenTimings ?? [])
             .sorted { $0.startTime < $1.startTime }
             .map(\.word)
-        return SpeechTranscript.text(timedWords: words, rawText: result.text)
+        return (SpeechTranscript.text(timedWords: words, rawText: result.text), result)
     }
 
     private func ready() async throws -> AsrManager {

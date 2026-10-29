@@ -2,7 +2,7 @@
 
 ## Sub-features
 
-- Jev judges whether a take needs layout and which dictionary span was meant; code applies spans. Short takes with nothing to judge skip Jev.
+- Jev judges whether a take needs layout and confirms each dictionary span the word spotter heard in the audio; code applies spans. Short takes with nothing to judge skip Jev.
 - A take that needs layout goes to DeepSeek V4.1 Flash (OpenCode key); `Layout.accept` pastes it only when every word survives in order (layout commands, item numbers and an and/then before a new item may go). Otherwise the prose is pasted.
 - Preserve numbered start, negation, uncommon words, `um`; remove standalone `uh`; correct known accents and misspellings, spoken numbers and `ship PR`.
 

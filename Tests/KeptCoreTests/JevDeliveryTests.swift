@@ -52,9 +52,10 @@ private func noLayout(_ text: String) async -> LayoutOutcome {
 
 @Test func aPlainJudgmentPastesProseWithTheChosenSpanAndNoLayoutCall() async {
     var asked = false
-    let result = await JevDelivery.prepare(raw: "buy code rabbit and milk", dictionary: ["CodeRabbit"], key: "saved", judge: { corrected, key in
-        asked = corrected == "buy code rabbit and milk" && key == "saved"
-        return JevJudgment(layout: false, replacements: [Replacement(span: "code rabbit", word: "CodeRabbit")], respell: [])
+    let heard = [HeardTerm(span: "coat rabbit", term: "CodeRabbit")]
+    let result = await JevDelivery.prepare(raw: "buy coat rabbit and milk", dictionary: ["CodeRabbit"], heard: heard, key: "saved", judge: { corrected, key in
+        asked = corrected == "buy coat rabbit and milk" && key == "saved"
+        return JevJudgment(layout: false, replacements: [Replacement(span: "coat rabbit", word: "CodeRabbit")], respell: [])
     }, layout: noLayout)
     #expect(asked)
     #expect(result.text == "Buy CodeRabbit and milk.")

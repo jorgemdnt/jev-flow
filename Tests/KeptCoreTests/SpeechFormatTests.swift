@@ -79,9 +79,3 @@ import Testing
     #expect(text.contains("author"))
     #expect(!text.contains("Author"))
 }
-
-@Test func candidatesFindAMishearingAndSkipADifferentWord() {
-    let found = SpeechFormat.candidates(in: "ship the post hog change", entries: ["PostHog", "auth"])
-    #expect(found["PostHog"]?.contains("post hog") == true)
-    #expect(found["auth"] == nil)
-}

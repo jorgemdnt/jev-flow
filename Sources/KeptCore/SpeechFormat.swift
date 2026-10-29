@@ -22,35 +22,6 @@ public enum SpeechFormat {
         return Formatter.finished(apply(replacements, to: named))
     }
 
-    /// Spans code is willing to replace. Jev picks among these. It cannot invent one.
-    public static func candidates(in transcript: String, entries: [String]) -> [String: [String]] {
-        let source = Formatter.format(transcript)
-        let tokens = words(in: source)
-        var found: [String: [String]] = [:]
-        for entry in entries {
-            let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-            var spans: [String] = []
-            let limit = min(4, tokens.count)
-            guard limit > 0 else { continue }
-            for size in 1...limit {
-                for index in 0...(tokens.count - size) {
-                    // A replaced span must not take the sentence's period with it.
-                    let span = tokens[index..<(index + size)].joined(separator: " ")
-                        .trimmingCharacters(in: edgePunctuation)
-                    guard !span.isEmpty, resembles(span, trimmed) else { continue }
-                    if !spans.contains(where: { $0.caseInsensitiveCompare(span) == .orderedSame }) {
-                        spans.append(span)
-                    }
-                }
-            }
-            if !spans.isEmpty {
-                found[trimmed] = spans
-            }
-        }
-        return found
-    }
-
     static func apply(_ replacements: [Replacement], to text: String) -> String {
         var result = text
         for item in replacements {
@@ -116,25 +87,19 @@ public enum SpeechFormat {
         return nil
     }
 
-    private static let edgePunctuation = CharacterSet.punctuationCharacters.subtracting(CharacterSet(charactersIn: "@"))
-
     private static func words(in text: String) -> [String] {
         text.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
-    private static func letters(_ text: String) -> String {
+    static func letters(_ text: String) -> String {
         text.folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
             .lowercased()
             .filter(\.isLetter)
     }
 
-    private static func resembles(_ span: String, _ entry: String) -> Bool {
-        let left = letters(span)
-        let right = letters(entry)
-        guard !left.isEmpty, !right.isEmpty else { return false }
-        if left == right { return true }
-        let distance = levenshtein(left, right)
-        return distance <= 2 && distance < left.count && distance < right.count
+    /// The span stands alone somewhere in the text.
+    static func contains(_ span: String, in text: String) -> Bool {
+        spanRange(span, in: text, from: text.startIndex) != nil
     }
 
     private static func replaceSpan(_ span: String, with word: String, in text: String) -> String {
@@ -174,22 +139,5 @@ public enum SpeechFormat {
 
     private static func isWordJoin(_ character: Character) -> Bool {
         character.isLetter || character == "@" || character == "."
-    }
-
-    private static func levenshtein(_ left: String, _ right: String) -> Int {
-        let a = Array(left)
-        let b = Array(right)
-        if a.isEmpty { return b.count }
-        if b.isEmpty { return a.count }
-        var row = Array(0...b.count)
-        for i in 1...a.count {
-            var next = [i]
-            for j in 1...b.count {
-                let cost = a[i - 1] == b[j - 1] ? 0 : 1
-                next.append(min(next[j - 1] + 1, row[j] + 1, row[j - 1] + cost))
-            }
-            row = next
-        }
-        return row[b.count]
     }
 }

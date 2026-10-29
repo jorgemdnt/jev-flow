@@ -35,8 +35,8 @@ enum JevFormat {
     /// moves when TypeSafe ships a new one.
     static let model = "jev-1.13.0"
 
-    static func prepare(raw: String, dictionary: [String]) async -> CleanupOutcome {
-        await prepare(raw: raw, dictionary: dictionary, key: TypeSafeKey.load(), send: {
+    static func prepare(raw: String, dictionary: [String], heard: [HeardTerm]) async -> CleanupOutcome {
+        await prepare(raw: raw, dictionary: dictionary, heard: heard, key: TypeSafeKey.load(), send: {
             try await URLSession.shared.data(for: $0)
         }, layout: { prose in
             await OpenCodeClient.layout(text: prose, key: OpenCodeKey.load())
@@ -46,19 +46,20 @@ enum JevFormat {
     static func prepare(
         raw: String,
         dictionary: [String],
+        heard: [HeardTerm] = [],
         key: String?,
         send: @escaping Transport,
         layout: (String) async -> LayoutOutcome = { _ in .unchanged }
     ) async -> CleanupOutcome {
-        let result = await JevDelivery.prepare(raw: raw, dictionary: dictionary, key: key, judge: { corrected, key in
-            try await ask(raw: raw, corrected: corrected, dictionary: dictionary, key: key, send: send)
+        let result = await JevDelivery.prepare(raw: raw, dictionary: dictionary, heard: heard, key: key, judge: { corrected, key in
+            try await ask(raw: raw, corrected: corrected, heard: heard, key: key, send: send)
         }, layout: layout)
         if let note = result.note { return .local(result.text, note: note) }
         return .model(result.text)
     }
 
-    private static func ask(raw: String, corrected: String, dictionary: [String], key: String, send: @escaping Transport) async throws -> JevJudgment {
-        let spans = SpeechFormat.candidates(in: corrected, entries: dictionary)
+    private static func ask(raw: String, corrected: String, heard: [HeardTerm], key: String, send: @escaping Transport) async throws -> JevJudgment {
+        let spans = HeardTerm.questions(heard, in: corrected)
         var questions: [String: Any] = [
             "layout": [
                 "type": "choice",
